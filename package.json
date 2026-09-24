@@ -1,0 +1,26 @@
+{
+  "name": "labib-rush",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.20.0",
+    "n8ao": "^2.0.1",
+    "postprocessing": "^6.39.5",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "playwright-core": "1.63",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.1"
+  }
+}
