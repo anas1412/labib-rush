@@ -1,0 +1,1 @@
+- HDRI "Qwantani Late Afternoon (Pure Sky)" by Greg Zaal & Jarod Guest, Poly Haven, CC0 — https://polyhaven.com/a/qwantani_late_afternoon_puresky (public/hdri/sky_1k.hdr, sky_2k.hdr)

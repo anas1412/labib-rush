@@ -1,0 +1,16 @@
+<!doctype html><body style="margin:0"><script type="module">
+import * as THREE from 'three';
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
+const r = new THREE.WebGLRenderer({ preserveDrawingBuffer: true }); r.setSize(64, 64); document.body.appendChild(r.domElement);
+const s = new THREE.Scene(); const c = new THREE.PerspectiveCamera(10, 1, 0.1, 10);
+const t = await new HDRLoader().loadAsync('/hdri/sky_1k.hdr'); t.mapping = THREE.EquirectangularReflectionMapping; s.background = t;
+const target = new THREE.Vector3(-0.94, 0.35, 0.34).normalize();
+const out = {};
+for (const deg of [-124, 124, -56, 56]) {
+  s.backgroundRotation.set(0, THREE.MathUtils.degToRad(deg), 0);
+  c.position.set(0,0,0); c.lookAt(target); r.render(s, c);
+  const gl = r.getContext(); const px = new Uint8Array(4); gl.readPixels(32, 32, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  out[deg] = Array.from(px);
+}
+document.title = JSON.stringify(out);
+</script>

@@ -4,3 +4,4 @@ dist
 .env*
 shots
 *.log
+.claude/
