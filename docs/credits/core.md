@@ -1,1 +1,3 @@
 - HDRI "Qwantani Late Afternoon (Pure Sky)" by Greg Zaal & Jarod Guest, Poly Haven, CC0 — https://polyhaven.com/a/qwantani_late_afternoon_puresky (public/hdri/sky_1k.hdr, sky_2k.hdr)
+- Font "Cairo" by Mohamed Gaber & Accademia di Belle Arti di Urbino, SIL OFL 1.1 — https://fonts.google.com/specimen/Cairo (public/fonts/cairo-*.woff2)
+- Font "Baloo Bhaijaan 2" by Ek Type, SIL OFL 1.1 — https://fonts.google.com/specimen/Baloo+Bhaijaan+2 (public/fonts/baloo-bhaijaan-2-*.woff2)

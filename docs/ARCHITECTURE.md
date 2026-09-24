@@ -14,7 +14,7 @@ Vite 8 + TypeScript 7 (`tsc` is the native TS 7 compiler) + Three.js r186 (WebGL
   report under `contract_changes_requested` — do not edit shared files.
 - Shared helpers you may import (don't edit): `src/core/physics.ts` (Rapier wrapper, collision
   groups `G`), `src/core/assets.ts` (cached loaders + progress), `src/core/events.ts` (Emitter),
-  `src/core/config.ts` (`RULES`, `PLAYER`, `LIGHTING`, …).
+  `src/core/config.ts` (`RULES`, `PLAYER`, `LIGHTING`, …), `src/core/fonts.ts` (`loadFonts()` — await before drawing canvas text; families `Cairo` and `"Baloo Bhaijaan 2"`, both with Arabic + Latin, already in `public/fonts/`).
 - Road surface y = 0; sidewalks, promenade and plazas y = `CURB` (0.15).
 - Static colliders: world builders call `ctx.physics.addBox/addCylinder/addTrimesh…` with group
   `G.STATIC` (walls, facades, kiosks, statues, trees) or `G.LOW_PROP` (benches, planters, café
@@ -70,7 +70,7 @@ A shared Vite dev server runs at **http://127.0.0.1:5180** (do not start another
 | labib | `src/player/labib.ts`, `src/player/labib/**`, `public/models/labib/**`, `dev/labib.*` |
 | props | `src/props/**`, `public/textures/props/**`, `public/models/props/**`, `dev/props.*` |
 | people | `src/npc/people.ts`, `src/npc/people/**`, `public/textures/people/**`, `dev/people.*` |
-| ui | `src/ui/**`, `src/gameplay/rules.ts`, `tests/**`, `public/fonts/**`, `dev/ui.*` |
+| ui | `src/ui/**`, `src/gameplay/rules.ts`, `tests/**`, `dev/ui.*` (fonts are provided, read-only) |
 | juice | `src/audio/**`, `src/fx/**`, `public/audio/**`, `dev/audio.*`, `dev/fx.*` |
 Plus each module's `docs/credits/<module>.md`.
 
