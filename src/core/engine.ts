@@ -76,8 +76,8 @@ const FOG_FALLOFF = 0.03; // 1/m, height fog e-folds every ~33 m
 
 // Dynamic resolution
 const TARGET_FPS = 60;
-/** Dynamic-resolution target: main.ts caps 'low'/'medium' at 30 fps, 'high'/'ultra' at 60. */
-const targetFor = (q: Quality) => (q === 'low' || q === 'medium' ? 30 : TARGET_FPS);
+/** Dynamic-resolution target: main.ts caps 'low' at 30 fps, the rest at 60. */
+const targetFor = (q: Quality) => (q === 'low' ? 30 : TARGET_FPS);
 const MIN_SCALE = 0.6;
 const EVAL_WINDOW_MS = 750;
 const PROBE_BACKOFF_MS = [15000, 30000, 60000, 120000]; // wait after each failed step up

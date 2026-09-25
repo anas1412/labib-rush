@@ -211,10 +211,10 @@ async function boot(): Promise<void> {
   let acc = 0;
   let last = performance.now();
 
-  // Frame cap: 30 fps on 'low'/'medium' (steadier on weak devices, saves battery), 60 on 'high'/'ultra'.
+  // Frame cap: 30 fps on 'low' (steadier on weak devices, saves battery), 60 fps otherwise.
   // 2 ms slack so a 60 Hz display's rAF jitter doesn't drop frames.
   function frame(now: number): void {
-    const minMs = 1000 / (engine.quality === 'low' || engine.quality === 'medium' ? 30 : 60) - 2;
+    const minMs = 1000 / (engine.quality === 'low' ? 30 : 60) - 2;
     if (now - last < minMs) return;
     const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
     last = now;
