@@ -1,5 +1,6 @@
 // UI preview page. ?screen=loading|name|menu|leaderboard|settings|howto|credits|hud|pause|gameover
 // Extra: &mobile=1 (touch layout even without a touch device) &t=8 (HUD timer seconds)
+//        &fresh=1 (HUD exactly as a new run starts: real createRun() + tick(), no fake pickups)
 //        &rank=out|first (game-over entry outside the top 10 / new #1) &empty=1 (no scores)
 //        &keep=1 (don't wipe/seed the dev keys: test persistence across reloads)
 //        &bg=/shots/some-game-view.png (a real scene screenshot behind the UI instead of the gradient)
@@ -20,6 +21,7 @@ const bg = params.get('bg');
 if (bg) Object.assign(document.getElementById('bg')!.style, { background: `center / cover url(${JSON.stringify(bg)})`, filter: 'none', inset: '0' });
 
 const keep = !!params.get('keep');
+const fresh = !!params.get('fresh');
 try {
   if (!keep) for (const k of Object.keys(localStorage)) if (k.startsWith(DEV_PREFIX)) localStorage.removeItem(k);
 } catch { /* storage blocked: the UI falls back to memory anyway */ }
@@ -57,13 +59,15 @@ let hudRaf = 0;
 function startHud(): void {
   ui.enterGame();
   const run = createRun();
-  run.timeLeft = Number(params.get('t') ?? 74.4);
-  applyPowerup(run, 'tea');
-  applyPowerup(run, 'chechia');
-  useRadar(run);
-  tick(run, 3);
-  for (let i = 0; i < 6; i++) { pickup(run, i % 2 ? 'bottle' : 'can'); tick(run, 0.4); }
-  run.score = 3890;
+  if (!fresh) {
+    run.timeLeft = Number(params.get('t') ?? 74.4);
+    applyPowerup(run, 'tea');
+    applyPowerup(run, 'chechia');
+    useRadar(run);
+    tick(run, 3);
+    for (let i = 0; i < 6; i++) { pickup(run, i % 2 ? 'bottle' : 'can'); tick(run, 0.4); }
+    run.score = 3890;
+  }
   ui.setProjector((w) => ({ x: w.x, y: w.y, visible: w.z >= 0 })); // dev: "world" = screen px
   ui.setBinPointer(new Vector3(-400, innerHeight * 0.55, -1)); // off-screen to the left
   const say = ['Mriguel!', 'Barcha!', 'GOOOAL!', 'Yaatik saha!'];
@@ -72,10 +76,13 @@ function startHud(): void {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     acc += dt;
-    run.comboTimer = Math.max(0.5, run.comboTimer - dt * 0.2);
-    run.timeLeft = Math.max(0, run.timeLeft - dt * 0.2);
+    if (fresh) tick(run, dt);
+    else {
+      run.comboTimer = Math.max(0.5, run.comboTimer - dt * 0.2);
+      run.timeLeft = Math.max(0, run.timeLeft - dt * 0.2);
+    }
     ui.updateHud(hudState(run));
-    if (acc > 1.3) {
+    if (acc > 1.3 && !fresh) {
       acc = 0;
       ui.callout(say[n % say.length], n % say.length === 2 ? 'good' : 'combo');
       ui.floatText(n % 3 === 2 ? '+200' : `+${45 * (n % 3 + 1)}`, new Vector3(innerWidth * (0.42 + (n % 3) * 0.08), innerHeight * 0.62, 0), n % 3 === 2 ? 'gold' : 'points');
@@ -87,7 +94,7 @@ function startHud(): void {
   cancelAnimationFrame(hudRaf);
   hudRaf = requestAnimationFrame(loop);
   setTimeout(() => ui.showHint('pickup'), 300);
-  if (screen === 'hud') setTimeout(() => ui.callout('Mriguel!', 'combo'), 1200);
+  if (screen === 'hud' && !fresh) setTimeout(() => ui.callout('Mriguel!', 'combo'), 1200);
 }
 
 const click = (text: string) =>

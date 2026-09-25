@@ -6,7 +6,7 @@
 import { Matrix4, Vector3 } from 'three';
 import { CELL, FACE_CELLS, HIPS_WAIST, V, cellUV, type CellId } from './atlas';
 import { Builder, ellipsoid, ellipsoidRings, loft, ring, shell, sweep, disc, type Bind, type HeadFn, type Paint, type Ring, type UvFn } from './geometry';
-import { FACE, faceUV, unitHead } from './head';
+import { FACE, HEAD_ASPECT, faceUV, faceXY, unitHead } from './head';
 import { mix, mul, rgb, rng, type RGB, type Traits } from './traits';
 
 /** Bone indices (order = skeleton order). L = character's left = +X. */
@@ -15,9 +15,12 @@ export const BONE = {
   armL: 5, foreL: 6, handL: 7, armR: 8, foreR: 9, handR: 10,
   thighL: 11, shinL: 12, footL: 13, thighR: 14, shinR: 15, footR: 16,
   cup: 17, trash: 18, bag: 19,
+  // skirt panels (driven by the animator from the legs, see anim.ts): front / back, upper (hip
+  // pivot) and lower (knee pivot)
+  skirtF: 20, skirtFL: 21, skirtB: 22, skirtBL: 23,
 } as const;
-export const BONE_COUNT = 20;
-export const PARENT: readonly number[] = [-1, 0, 1, 2, 3, 2, 5, 6, 2, 8, 9, 0, 11, 12, 0, 14, 15, 10, 10, 7];
+export const BONE_COUNT = 24;
+export const PARENT: readonly number[] = [-1, 0, 1, 2, 3, 2, 5, 6, 2, 8, 9, 0, 11, 12, 0, 14, 15, 10, 10, 7, 0, 20, 0, 22];
 
 export interface Dims {
   H: number;
@@ -80,7 +83,7 @@ const LEG = [
 ] as const;
 // Arm (skin): [y/H, rx, rz]; the last rows round off the deltoid.
 const ARM = [
-  [0.458, 0.012, 0.0132], [0.52, 0.0168, 0.018], [0.575, 0.0196, 0.0205], [0.618, 0.0192, 0.0198], [0.67, 0.0212, 0.0222],
+  [0.458, 0.012, 0.0132], [0.565, 0.0196, 0.0205], [0.618, 0.0192, 0.0198], [0.67, 0.0212, 0.0222],
   [0.72, 0.0235, 0.0245], [0.765, 0.0262, 0.0268], [0.793, 0.0262, 0.026], [0.808, 0.0212, 0.0206], [0.815, 0.0118, 0.0112],
 ] as const;
 /** A garment band on a limb/torso between heights y0..y1 (metres). Outermost (last) wins. */
@@ -192,8 +195,8 @@ export function buildBody(t: Traits, lean = false): BodyResult {
   const headC = new Vector3(0, H - hr.y, h(0.006));
   const footLen = h(0.152);
   const shoeK = 1.08; // stylised: slightly chunkier shoes read better at a distance
-  const neckR = h(f ? 0.031 : 0.036) * (0.85 + 0.15 * W);
-  const neckZ = -h(0.008);
+  const neckR = h(f ? 0.036 : 0.043) * (0.85 + 0.15 * W); // stylised: sturdy necks (a thin one reads as a lollipop)
+  const neckZ = -h(0.02); // the neck sits back under the skull; the throat is well behind the chin
   const grip = (s: number) => new Vector3(s * (wristX - h(0.004)), wristY - h(0.052), h(0.006));
 
   const J: Vector3[] = [];
@@ -215,6 +218,8 @@ export function buildBody(t: Traits, lean = false): BodyResult {
   J[BONE.cup] = grip(-1);
   J[BONE.trash] = grip(-1);
   J[BONE.bag] = grip(1);
+  J[BONE.skirtF] = J[BONE.skirtB] = new Vector3(0, hipY, 0);
+  J[BONE.skirtFL] = J[BONE.skirtBL] = new Vector3(0, kneeY, h(0.003));
 
   // ------------------------------------------------------------------ colours & helpers
   const skin = t.skin;
@@ -301,11 +306,12 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const side = Math.abs(Math.sin(az));
     const pit = Math.exp(-(((p.y / H - 0.775) / 0.03) ** 2)) * side * side; // armpits
     const underBust = f ? Math.exp(-(((p.y / H - 0.685) / 0.02) ** 2)) * Math.max(0, Math.cos(az)) * t.bust : 0;
-    return mul(ao3(az, p, c), 1 - 0.28 * pit - 0.12 * underBust);
+    const crotch = smooth(0.52, 0.47, p.y / H); // the funnel between the thighs faces down: in shade
+    return mul(ao3(az, p, c), 1 - 0.28 * pit - 0.12 * underBust - 0.4 * crotch);
   };
   // slightly front-dense azimuths: lapels, V-necks and ties need resolution at the front
   const azFront = (u: number) => { const k = u * 2 - 1; return Math.PI * k * (0.72 + 0.28 * Math.abs(k)); };
-  loft(bd, layered(torsoYs, torsoLayers, torso, torsoBind, torsoAo), lean ? 16 : 18, { azMap: azFront });
+  loft(bd, layered(torsoYs, torsoLayers, torso, torsoBind, torsoAo), lean ? 14 : 16, { azMap: azFront });
   part('torso');
   /** Outer torso surface point (incl. clothing) for straps and ties. */
   const torsoSurf = (y: number, az: number, extra: number, underJacket = false): Vector3 => {
@@ -317,35 +323,57 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     return new Vector3((s.rx + off + extra) * se(sn), y, s.cz + ((cs >= 0 ? s.rzf : s.rzb) + off + extra) * se(cs));
   };
 
-  // jacket front edges / lapels: ribbons along the opening give it a crisp, slightly raised edge
+  // jacket front edges / lapels: a flap lying on the jacket along the opening — a narrow facing
+  // below the top button, widening into the lapel over the chest and narrowing at the collar notch.
+  // Its inner edge overhangs the opening (covering the loft's stepped edge) and rolls in a little.
   if (jk && jacketEdge) {
     const vhalf = jacketEdge;
     const tailored = jk.kind === 'suit' || jk.kind === 'blazer';
-    const y0 = jk.open ? jkHem + h(0.004) : jacketButton, y1 = h(0.81);
+    const y0 = jk.open ? jkHem + h(0.004) : jacketButton, y1 = h(0.812);
+    const n = 7;
     for (const s of [1, -1] as const) {
-      const pts: Vector3[] = [], ups: Vector3[] = [];
-      const n = 5;
+      const rows: number[][] = [];
       for (let i = 0; i <= n; i++) {
         const y = lerp(y0, y1, i / n);
-        const az = s * (vhalf(y) + 0.02);
-        pts.push(torsoSurf(y, az, h(0.0015)));
-        ups.push(new Vector3(Math.sin(az), 0.15, Math.cos(az)).normalize());
+        const lap = y > jacketButton ? smooth(jacketButton, h(0.745), y) * (1 - 0.55 * smooth(h(0.785), h(0.812), y)) : 0;
+        const az = vhalf(y), wd = 0.07 + (tailored ? 0.3 : 0.14) * lap;
+        const b = torsoBind(y);
+        const col = (k: number): RGB => mul(jk.color, k);
+        rows.push([
+          bd.v(torsoSurf(y, s * (az - 0.035), -h(0.003)), col(0.7), b, jkRough),
+          bd.v(torsoSurf(y, s * (az - 0.03), h(0.0022)), col(0.95), b, jkRough),
+          bd.v(torsoSurf(y, s * (az + wd * 0.45), h(0.003)), col(1.04), b, jkRough),
+          bd.v(torsoSurf(y, s * (az + wd), h(0.0012)), col(0.86), b, jkRough),
+        ]);
       }
-      const w = (i: number) => h(tailored ? lerp(0.006, 0.017, smooth(0.2, 1, i / n) * (lerp(y0, y1, i / n) > jacketButton ? 1 : 0.3)) : 0.005);
-      sweep(bd, pts, (i) => ups[i], w, h(0.0022), (i) => mul(jk.color, i === n ? 0.85 : 0.95), BONE.chest, jkRough);
+      for (let i = 0; i < n; i++) {
+        for (let k = 0; k < 3; k++) {
+          const a0 = rows[i][k], a1 = rows[i][k + 1], c0 = rows[i + 1][k], c1 = rows[i + 1][k + 1];
+          if (s > 0) { bd.tri(a0, a1, c0); bd.tri(a1, c1, c0); } else { bd.tri(a0, c0, a1); bd.tri(a1, c0, c1); }
+        }
+      }
     }
     part('lapels');
   }
 
   // ------------------------------------------------------------------ skirt / dress / robe / tunic
-  /** Flared tube from y0 down to the hem. Upper vertices follow the hips + both thighs, lower ones
-   *  the shins, so legs never poke through and a seated robe drapes from the knees. */
+  /** Flared tube from y0 down to the hem. The waistband follows the pelvis; below the hip joint
+   *  the front follows the skirtF panel bones (driven by whichever leg is further forward), the back
+   *  the skirtB ones (the leg further back), the sides both — so neither leg pokes through while
+   *  walking, a seated skirt lies over the lap and hangs from the knees, and nothing tears. */
   const skirt = (y0: number, hem: number, color: RGB, flare: number, baseOff: number, rough: number, folds: number) => {
     const len = y0 - hem;
     const n = Math.max(2, Math.round(len / h(0.1)) + 1);
     const rings: Ring[] = [];
     const ph = t.seed * 0.7;
     const fold = (az: number) => Math.sin(az * 4 + ph) * 0.6 + Math.sin(az * 7 + ph * 2) * 0.4;
+    const bindF = (az: number, p: Vector3): Bind => {
+      const depth = smooth(hipY + h(0.03), hipY - h(0.05), p.y);
+      const wF = 0.5 + 0.5 * Math.cos(az);
+      const lo = smooth(kneeY + h(0.03), kneeY - h(0.03), p.y);
+      if (lo > 0) return { b: [BONE.skirtF, BONE.skirtFL, BONE.skirtB, BONE.skirtBL], w: [wF * (1 - lo), wF * lo, (1 - wF) * (1 - lo), (1 - wF) * lo] };
+      return { b: [BONE.hips, BONE.skirtF, BONE.skirtB], w: [1 - depth, depth * wF, depth * (1 - wF)] };
+    };
     for (let i = 0; i <= n; i++) {
       const u = i / n; // 0 at the hem → 1 at the top
       const y = lerp(hem, y0, u);
@@ -356,20 +384,13 @@ export function buildBody(t: Traits, lean = false): BodyResult {
       const rzf = Math.max(s.rzf, h(0.068)) + baseOff + flare * 0.75 * d;
       const rzb = Math.max(s.rzb, h(0.068)) + baseOff + flare * 0.75 * d;
       const col: Paint<RGB> = (az, p) => mul(jitter(color, p, 0.03), (0.86 + 0.14 * u) * (1 - 0.14 * d * (0.5 - 0.5 * fold(az))));
-      const bindF = (_az: number, p: Vector3): Bind => {
-        const depth = clamp((y0 - p.y) / Math.max(h(0.06), y0 - kneeY), 0, 1) * 0.95;
-        const sL = smooth(-rx * 0.45, rx * 0.45, p.x), sR = 1 - sL;
-        const below = clamp((kneeY - p.y) / (kneeY - ankleY), 0, 1) * 0.75;
-        if (below > 0) return { b: [BONE.thighL, BONE.thighR, BONE.shinL, BONE.shinR], w: [sL * (1 - below), sR * (1 - below), sL * below, sR * below] };
-        return { b: [BONE.hips, BONE.thighL, BONE.thighR], w: [1 - depth, depth * sL, depth * sR] };
-      };
       const rr = ring(y, rx, rzf, rzb, col, bindF, rough, { sq: 2.1, uv: uvSkirt });
       if (folds > 0) rr.dr = (az) => folds * d * fold(az);
       rings.push(rr);
     }
     // turned hem: an inner lip so the edge has visible thickness from below
     const h0 = rings[0];
-    const lip = ring(h0.y + h(0.006), h0.rx - h(0.007), h0.rzf - h(0.007), h0.rzb - h(0.007), mul(color, 0.45), h0.bind, rough, { sq: 2.1, uv: uvSkirt });
+    const lip = ring(h0.y + h(0.006), h0.rx - h(0.007), h0.rzf - h(0.007), h0.rzb - h(0.007), mul(color, 0.62), h0.bind, rough, { sq: 2.1, uv: uvSkirt });
     lip.dr = h0.dr;
     loft(bd, [lip, ...rings], 18);
   };
@@ -404,9 +425,11 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     } else if (robe) {
       layers.push({ y0: h(0.05), y1: 9, off: h(0.006), col: mul(bot.color, 0.92), rough: R.cotton, uv: uvLeg(CELL.trouserLeg) }); // sarouel under the jebba
     }
-    // under skirts only the part below the hem (plus knee + hip joint rings) is ever visible
+    // under skirts only the part below the hem is ever visible: the leg tube ends (open, inside the
+    // skirt) a little above the hem
     let ys = LEG.map((k) => h(k[0]));
-    if (skirted) ys = ys.filter((y) => y <= h(bot.hem) + h(0.06) || Math.abs(y - kneeY) < 1e-6 || y >= hipY - 1e-6);
+    if (trousers) ys = ys.filter((y) => Math.abs(y - h(0.07)) > 1e-6); // just above the hem: the ankle break ring does its job
+    if (skirted) { ys = ys.filter((y) => y <= h(bot.hem) + h(0.03)); ys.push(h(bot.hem) + h(0.075)); }
     if (trousers) ys.push(h(bot.hem) + h(0.018)); // ankle break
     ys.sort((a, b) => a - b);
     const bind = (y: number): Bind => {
@@ -415,7 +438,9 @@ export function buildBody(t: Traits, lean = false): BodyResult {
       if (y > hipY) return blend(th, BONE.hips, 0.4 * smooth(hipY, h(0.545), y));
       return th;
     };
-    loft(bd, layered(ys, layers, shape, bind, ao3), lean ? 9 : 10);
+    // inner thighs near the crotch are occluded by the other leg
+    const legAo = (az: number, p: Vector3, c: RGB): RGB => mul(ao3(az, p, c), 1 - 0.3 * Math.max(0, -s * Math.sin(az)) * smooth(h(0.4), h(0.5), p.y));
+    loft(bd, layered(ys, layers, shape, bind, legAo), lean ? 9 : 10);
   }
   part('legs');
 
@@ -438,7 +463,7 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const z0 = az0 + rows[0][0] * L, z1 = az0 + rows[rows.length - 1][0] * L;
     const uv: UvFn = (u, p) => cellUV(shoeCell, u, (p.z - z0) / (z1 - z0));
     const rings = rows.map(([a, cy, up, dn, rx]) => ring(az0 + a * L, h(rx) * shoeK, h(up) * shoeK, h(dn), shoeCol, fb, rough, { cx: ax + s * h(0.002) * a, cz: h(cy), sq: 2.6, uv }));
-    loft(bd, rings, 8, { axis: 'z', capStart: true, capEnd: true });
+    loft(bd, rings, 7, { axis: 'z', capStart: true, capEnd: true });
   }
   part('shoes');
 
@@ -465,31 +490,39 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const armAo = (az: number, p: Vector3, c: RGB): RGB => mul(ao3(az, p, c), 1 - 0.18 * Math.max(0, -s * Math.sin(az)) * smooth(h(0.62), h(0.78), p.y));
     loft(bd, layered(ys, layers, shape, bind, armAo), lean ? 7 : 8, { capEnd: true });
 
-    // hand: a relaxed mitten, palm facing the thigh (inward = −s·X), fingers stacked front → back
-    // (painted separations in the hand cell), thumb forward
+    // hand, palm facing the thigh (inward = −s·X), fingers down, thumb forward: a palm block and a
+    // slightly curled, thinner four-finger block (knuckle step; separations painted in the hand cell)
+    // plus a two-joint thumb
     const inward = -s;
     const hx = s * wristX;
     const hsz = (f ? 0.95 : 1.05) * (0.85 + 0.15 * W);
     // [dy (H), thickness rx, front rz, back rz, shift toward palm, forward shift]
-    const HAND = [[0.008, 0.0095, 0.0115, 0.0115, 0, 0], [-0.014, 0.0112, 0.0195, 0.0172, 0, 0.001], [-0.042, 0.0122, 0.021, 0.019, 0.001, 0.001],
-      [-0.058, 0.011, 0.0198, 0.0172, 0.003, 0], [-0.075, 0.0088, 0.0168, 0.0138, 0.007, -0.001], [-0.092, 0.0048, 0.0098, 0.0078, 0.012, -0.002]] as const;
+    const HAND = [[0.008, 0.0095, 0.0115, 0.0115, 0, 0], [-0.012, 0.011, 0.019, 0.017, 0, 0.001], [-0.036, 0.0118, 0.021, 0.019, 0.0008, 0.001],
+      [-0.052, 0.0106, 0.0202, 0.018, 0.0015, 0], [-0.058, 0.0084, 0.0186, 0.0166, 0.0025, 0], [-0.074, 0.0074, 0.017, 0.015, 0.0048, -0.0005],
+      [-0.088, 0.006, 0.0135, 0.0115, 0.0085, -0.001], [-0.096, 0.0034, 0.008, 0.007, 0.012, -0.0015]] as const;
     const yTip = wristY + h(HAND[HAND.length - 1][0]) * hsz, yWr = wristY + h(HAND[0][0]) * hsz;
     const handCol = (_az: number, p: Vector3): RGB => mul(skin, 0.97 - 0.08 * smooth(wristY - h(0.05), wristY - h(0.095), p.y));
     const huv: UvFn = (u, p) => cellUV(CELL.hand, u, (p.y - yTip) / (yWr - yTip));
     const hrings = HAND.map(([dy, rx, rzf, rzb, sp, fw]) => ring(wristY + h(dy) * hsz, h(rx) * hsz, h(rzf) * hsz, h(rzb) * hsz, handCol, ha, R.skin, { cx: hx + inward * h(sp) * hsz, cz: h(fw) * hsz, uv: huv }));
     loft(bd, hrings.reverse(), 7, { capStart: true });
-    const m = new Matrix4().makeTranslation(hx + inward * h(0.006) * hsz, wristY - h(0.03) * hsz, h(0.018) * hsz)
-      .multiply(new Matrix4().makeRotationZ(-0.3 * s)).multiply(new Matrix4().makeRotationX(-0.55));
-    ellipsoid(bd, new Vector3(0, -h(0.012) * hsz, 0), h(0.0074) * hsz, h(0.021) * hsz, h(0.008) * hsz, 5, 3, skin, ha, R.skin, m, 2, uvSkin);
+    // thumb: from the ball of the thumb, forward-down and a little toward the palm
+    const tm = new Matrix4().makeTranslation(hx + inward * h(0.005) * hsz, wristY - h(0.02) * hsz, h(0.016) * hsz)
+      .multiply(new Matrix4().makeRotationZ(-0.25 * s)).multiply(new Matrix4().makeRotationX(-0.5));
+    const TH = [[0, 0.0078, 0.0085], [-0.022, 0.0062, 0.0064], [-0.04, 0.0048, 0.005], [-0.047, 0.0026, 0.0028]] as const;
+    loft(bd, TH.map(([dy, rx, rz]) => ring(h(dy) * hsz, h(rx) * hsz, h(rz) * hsz, h(rz) * hsz, skin, ha, R.skin, { uv: uvSkin })).reverse(), 5, { capStart: true, m: tm });
   }
   part('arms');
 
-  // ------------------------------------------------------------------ neck (hidden under hijab drapes)
-  if (!covered) {
+  // ------------------------------------------------------------------ neck (under a headscarf: the
+  // under-scarf, so the throat stays covered however the head turns or pitches)
+  {
     const nb = (y: number): Bind => (y < neckY ? blend(BONE.chest, BONE.neck, 0.5) : y < headPivotY ? blend(BONE.neck, BONE.head, smooth(neckY, headPivotY, y) * 0.6) : BONE.head);
     const ys = [h(0.8), neckY, lerp(neckY, headPivotY, 0.5), headPivotY, headC.y - h(0.025)];
-    loft(bd, ys.map((y, i) => ring(y, neckR * (i === 0 ? 1.3 : 1), neckR * (i === 0 ? 1.1 : 0.95), neckR * (i === 0 ? 1.2 : 1.08),
-      (az, p) => mul(skin, 1 - 0.28 * Math.max(0, Math.cos(az)) * smooth(headPivotY - h(0.02), headC.y - h(0.035), p.y)), nb(y), R.skin, { cz: neckZ, uv: uvSkin })), 10);
+    const hc = t.headwearColor;
+    const k = covered ? 1.12 : 1; // the scarf is a little fuller than the neck
+    loft(bd, ys.map((y, i) => ring(y, neckR * k * (i === 0 ? 1.3 : 0.96), neckR * k * (i === 0 ? 1.1 : 0.9), neckR * k * (i === 0 ? 1.2 : 1.05),
+      (az, p) => covered ? mul(jitter(hc, p, 0.03), 0.8) : mul(skin, 1 - 0.28 * Math.max(0, Math.cos(az)) * smooth(headPivotY - h(0.02), headC.y - h(0.035), p.y)),
+      nb(y), covered ? R.silk : R.skin, { cz: neckZ, uv: covered ? (u, p) => cellUV(CELL.hijab, u, 0.5 + (p.y - neckY) / h(0.2)) : uvSkin })), 10);
     part('neck');
   }
 
@@ -501,14 +534,28 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const rz = Math.cos(ph) >= 0 ? hr.zf : hr.zb;
     return out.set(headC.x + _u.x * (hr.x + off), headC.y + _u.y * (hr.y + off), headC.z + _u.z * (rz + off));
   };
-  const faceCell: CellId = t.age === 'senior' ? (f ? FACE_CELLS.oldFemale : FACE_CELLS.oldMale) : (f ? FACE_CELLS.female : FACE_CELLS.male)[(t.seed >>> 3) & 1];
-  const uvFace = (p: Vector3) => { const [u, v] = faceUV((p.x - headC.x) / hr.x, (p.y - headC.y) / hr.y); return cellUV(faceCell, u, v); };
+  const faces: readonly CellId[] = t.age === 'senior' ? (f ? FACE_CELLS.oldFemale : FACE_CELLS.oldMale) : f ? FACE_CELLS.female : FACE_CELLS.male;
+  const faceCell = faces[Math.floor(r() * faces.length) % faces.length];
+  // per-person proportions from the same painting: eye spacing / width, eye and mouth heights
+  const fsx = 0.93 + 0.14 * r(), eyeDy = (r() - 0.5) * 0.06, mouthDy = (r() - 0.5) * 0.07;
+  const eyeY = faceXY(FACE.eye.th, 0)[1] * HEAD_ASPECT, mouthY = faceXY(FACE.mouth.th, 0)[1] * HEAD_ASPECT;
+  const uvFace = (p: Vector3) => {
+    const x = (p.x - headC.x) / hr.x, y = (p.y - headC.y) / hr.y;
+    const [u, v] = faceUV(x * fsx, y + eyeDy * Math.exp(-(((y - eyeY) / 0.22) ** 2)) + mouthDy * Math.exp(-(((y - mouthY) / 0.18) ** 2)));
+    return cellUV(faceCell, u, v);
+  };
   // hairline (θ where the hair shell ends, per azimuth); also tints the scalp just inside it
   const hs2 = t.hairStyle;
   const longish = hs2 === 'long' || hs2 === 'bob' || hs2 === 'ponytail' || hs2 === 'bun' || (f && hs2 === 'curly');
-  let th1 = hl([[0, 0.8], [0.45, 0.86], [0.9, 1.22], [1.12, 1.62], [1.3, 1.78], [1.52, 1.42], [1.85, 1.58], [2.35, 2.08], [Math.PI, 2.28]]);
-  if (hs2 === 'receding' || t.headwear === 'chechia' || t.headwear === 'cap') th1 = hl([[0, 0.45], [0.35, 0.65], [0.8, 0.98], [1.12, 1.55], [1.3, 1.7], [1.52, 1.42], [1.85, 1.55], [2.35, 2.05], [Math.PI, 2.25]]);
-  if (longish) th1 = hl([[0, hs2 === 'bun' || hs2 === 'ponytail' ? 0.8 : 0.92], [0.5, 0.95], [0.95, 1.42], [1.2, 1.85], [1.5, hs2 === 'ponytail' || hs2 === 'bun' ? 1.68 : 2.05], [2.2, 2.3], [Math.PI, hs2 === 'bob' ? 2.5 : 2.35]]);
+  // (θ in head radians: brows at 1.4, eyes 1.61, ear top ≈ 1.55; φ = 0 front, ±π/2 over the ears)
+  let th1 = hl([[0, 1.02], [0.4, 1.05], [0.8, 1.2], [1.05, 1.5], [1.25, 1.78], [1.42, 1.5], [1.75, 1.5], [2.3, 2.05], [Math.PI, 2.25]]);
+  if (hs2 === 'receding' || t.headwear === 'chechia' || t.headwear === 'cap') th1 = hl([[0, 0.62], [0.35, 0.72], [0.8, 1.0], [1.08, 1.5], [1.25, 1.72], [1.42, 1.5], [1.75, 1.5], [2.3, 2.02], [Math.PI, 2.22]]);
+  const pulled = hs2 === 'bun' || hs2 === 'ponytail';
+  const bangs = f && (hs2 === 'long' || hs2 === 'bob') && r() < 0.45;
+  if (pulled) th1 = hl([[0, 1.0], [0.5, 1.05], [0.9, 1.3], [1.15, 1.66], [1.4, 1.5], [1.75, 1.52], [2.3, 2.1], [Math.PI, 2.25]]);
+  else if (longish) th1 = hl([[0, bangs ? 1.3 : 1.06], [0.4, bangs ? 1.32 : 1.1], [0.8, bangs ? 1.42 : 1.32], [1.1, 1.72], [1.4, 1.95], [1.75, 2.05], [2.3, 2.3], [Math.PI, hs2 === 'bob' ? 2.48 : 2.38]]);
+  /** Women's loose hair covers the ears. */
+  const earsHidden = longish && !pulled;
   const hasHair = (hs2 !== 'covered' && hs2 !== 'bald') || t.headwear === 'chechia' || t.headwear === 'cap';
   const scalpTint = (th: number, ph: number) => (hasHair && hs2 !== 'buzz' ? 0.35 * (1 - smooth(th1(ph) - 0.02, th1(ph) + 0.14, th)) : hs2 === 'buzz' ? 0.5 * (1 - smooth(th1(ph), th1(ph) + 0.05, th)) : 0);
   const beardZone = (th: number, ph: number) => smooth(1.95, 2.25, th) * (1 - smooth(1.25, 1.55, Math.abs(ph)));
@@ -517,7 +564,8 @@ export function buildBody(t: Traits, lean = false): BodyResult {
   const headCol = (_t: number, ph: number, th: number): RGB => {
     const cheek = Math.exp(-(((th - 1.95) / 0.25) ** 2)) * Math.exp(-(((Math.abs(ph) - 0.6) / 0.3) ** 2));
     let c: RGB = [skin[0] * (1 + 0.06 * cheek), skin[1] * (1 - 0.02 * cheek), skin[2] * (1 - 0.025 * cheek)];
-    c = mul(c, 1 - 0.1 * smooth(2.5, 2.9, th) * Math.max(0, Math.cos(ph)));
+    // under the jaw line (faces the ground: bounce light only) a little darker, which draws the jaw
+    c = mul(c, 1 - 0.1 * smooth(2.5, 2.9, th) * Math.max(0, Math.cos(ph)) - 0.12 * smooth(2.74 - 0.44 * smooth(0.25, 1.35, Math.abs(ph)), 2.95, th));
     if (stubble) c = mix(c, mul(beardCol, 0.85), stubble * beardZone(th, ph));
     const tint = scalpTint(th, ph);
     if (tint > 0) c = mix(c, mul(t.hair, 0.9), tint);
@@ -526,14 +574,18 @@ export function buildBody(t: Traits, lean = false): BodyResult {
   // two shells: the front half carries the painted face, the back half plain skin; the seams at
   // the ears are twinned so the head shades as one surface
   const TH_END = Math.PI * 0.94;
-  const rowMap = knots([[0, 0], [2 / 12, 1.0 / TH_END], [10 / 12, 2.6 / TH_END], [1, 1]]);
+  // rows on the facial landmarks (brow, eyes, cheekbones, nose base, mouth, chin, jaw), columns
+  // denser toward the middle of the face
+  const HEAD_ROWS = [0, 0.45, 0.85, 1.15, 1.38, 1.55, 1.7, 1.87, 2.05, 2.22, 2.4, 2.6, 2.79, TH_END];
+  const rowMap = knots(HEAD_ROWS.map((th, i) => [i / (HEAD_ROWS.length - 1), th / TH_END] as const));
+  const colMap = (u: number) => { const k = 2 * u - 1; return 0.5 + 0.5 * Math.sign(k) * Math.pow(Math.abs(k), 1.25); };
   const front = shell(bd, headFn, {
-    rows: 12, segs: lean ? 10 : 12, phi0: -Math.PI / 2, phi1: Math.PI / 2, th0: () => 0, th1: () => TH_END, rowMap, off: () => 0,
+    rows: HEAD_ROWS.length - 1, segs: 14, phi0: -Math.PI / 2, phi1: Math.PI / 2, th0: () => 0, th1: () => TH_END, rowMap, colMap, off: () => 0,
     bind: BONE.head, rough: R.skin, col: headCol, uv: (_t, _ju, _ph, _th, p) => uvFace(p),
   });
-  if (!covered) { // under a headscarf the back of the head is never seen
+  { // (kept under a headscarf too: it closes the view past the face opening's edges)
     const back = shell(bd, headFn, {
-      rows: 12, segs: lean ? 6 : 7, phi0: Math.PI / 2, phi1: Math.PI * 1.5, th0: () => 0, th1: () => TH_END, rowMap, off: () => 0,
+      rows: HEAD_ROWS.length - 1, segs: lean ? 5 : 6, phi0: Math.PI / 2, phi1: Math.PI * 1.5, th0: () => 0, th1: () => TH_END, rowMap, off: () => 0,
       bind: BONE.head, rough: R.skin, col: headCol, uv: (tt, ju) => cellUV(CELL.skin, ju, tt),
     });
     front.first.forEach((v, i) => bd.twin(v, back.last[i]));
@@ -546,25 +598,32 @@ export function buildBody(t: Traits, lean = false): BodyResult {
   // the face cell by the same projection, so the painted side shading lands on it
   const hp = (th: number, ph: number, off: number) => headFn(th, ph, off, new Vector3());
   {
-    // [θ, half width, protrusion, depth behind the face surface] — alae at the base, round tip, low bridge
-    const rows = [[1.945, 0.0108, 0.0028, 0.006], [1.91, 0.0112, 0.0072, 0.0072], [1.865, 0.0094, 0.0084, 0.007], [1.79, 0.0066, 0.0064, 0.006], [1.69, 0.005, 0.0036, 0.005], [1.59, 0.0045, 0.0011, 0.005]] as const;
-    const nw = (f ? 0.88 : 1) * (0.9 + 0.2 * r());
+    // [θ, half width, protrusion, depth behind the face surface] — wide alae at the base, a round
+    // bulb of a tip, a soft bridge
+    const rows = [[1.955, 0.0122, 0.004, 0.007], [1.925, 0.0126, 0.0108, 0.008], [1.875, 0.0108, 0.0128, 0.008], [1.8, 0.0076, 0.0098, 0.007], [1.7, 0.0056, 0.006, 0.006], [1.59, 0.0048, 0.0022, 0.005]] as const;
+    const nw = (f ? 0.86 : 1) * (0.9 + 0.2 * r());
     const low = hp(1.915, 0, 0).y;
     const nrings = rows.map(([th, rx, prot, back]) => {
       const sp = hp(th, 0, 0);
-      const tip = th > 1.84 && th < 1.92;
-      const rr = ring(sp.y, h(rx) * nw, h(back + prot) * nw, h(0.003), (az, p) => mul(skin, p.y < low ? 0.72 + 0.2 * Math.max(0, Math.cos(az)) : tip ? 1.02 + 0.05 * Math.max(0, Math.cos(az)) : 1.01), BONE.head, R.skin, { cz: sp.z - h(back), sq: 2 });
+      const tip = th > 1.84 && th < 1.94;
+      const rr = ring(sp.y, h(rx) * nw, h(back + prot) * nw, h(0.003), (az, p) => mul(skin, p.y < low ? 0.7 + 0.22 * Math.max(0, Math.cos(az)) : tip ? 1.03 + 0.05 * Math.max(0, Math.cos(az)) : 1.01), BONE.head, R.skin, { cz: sp.z - h(back), sq: 2 });
       rr.uv = (_u, p) => uvFace(p);
       return rr;
     });
     loft(bd, nrings, 6, { capStart: true, capEnd: true });
   }
   // ears
-  if (!covered) {
+  if (!covered && !earsHidden) {
     for (const s of [1, -1] as const) {
       const ec = hp(1.72, s * 1.6, -h(0.004));
       const em = new Matrix4().makeTranslation(ec.x, ec.y, ec.z).multiply(new Matrix4().makeRotationY(s * 0.25)).multiply(new Matrix4().makeRotationX(-0.12));
-      ellipsoid(bd, new Vector3(), h(0.0055), h(0.023), h(0.014), 7, 3, (_az, p) => mul([skin[0] * 1.02, skin[1] * 0.9, skin[2] * 0.88], (p.x - ec.x) * s > h(0.002) ? 1 : 0.75), BONE.head, R.skin, em, 2, uvSkin);
+      // rim lighter and warmer, the bowl (concha) in shade, the back against the head darker
+      const earCol = (_az: number, p: Vector3): RGB => {
+        const q = new Vector3().copy(p).sub(ec);
+        const rim = Math.min(1, Math.hypot(q.y / h(0.024), q.z / h(0.015)));
+        return mul([skin[0] * 1.03, skin[1] * 0.9, skin[2] * 0.86], (q.x * s > 0 ? 0.78 + 0.24 * rim : 0.7));
+      };
+      ellipsoid(bd, new Vector3(), h(0.0062), h(0.025), h(0.015), 7, 3, earCol, BONE.head, R.skin, em, 2, uvSkin);
     }
   }
   part('face');
@@ -582,11 +641,13 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const bumpA = hs2 === 'curly' ? h(0.006) : h(0.0015);
     // bangs keep a visible edge at the front; elsewhere the hair thins into the scalp
     const hatted = t.headwear === 'chechia' || t.headwear === 'cap'; // only the fringe below the hat
+    // columns denser at the front, where the hairline is
+    const hairCols = (u: number) => { const k = 2 * u - 1; return 0.5 + 0.5 * Math.sign(k) * Math.pow(Math.abs(k), 0.75); };
     shell(bd, headFn, {
-      rows: hatted ? 4 : 6, segs: lean ? 14 : 16, th0: () => (hatted ? 0.95 : 0), th1,
+      rows: hatted ? 4 : 6, segs: lean ? 16 : 20, th0: () => (hatted ? 0.95 : 0), th1, colMap: hairCols,
       off: (tt, ph, th) => {
         const fr = Math.max(0, Math.cos(ph));
-        const taper = longish ? lerp(1, 0.3, fr) : 1; // edge meets the scalp (except bangs)
+        const taper = bangs ? lerp(1, 0.05, fr) : longish ? lerp(1, 0.3, fr) : 1; // edge meets the scalp (except a fringe)
         return thick * (1 - smooth(0.7, 1, tt) * taper) + bumpA * (Math.sin(ph * 9 + th * 7 + t.seed) * 0.5 + 0.5) + (hs2 === 'bob' ? h(0.012) * smooth(0.5, 1, tt) * (1 - fr) : 0) + (!hatted && (hs2 === 'short' || hs2 === 'curly') ? h(0.004) * (1 - tt) : 0);
       },
       col: hairCol(t.hair), bind: BONE.head, rough: R.hair, uv: (tt, ju) => hairUv(hatted ? 0.6 + 0.4 * tt : tt, ju),
@@ -654,43 +715,51 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const saf = t.headwear === 'safsari';
     const fabric = (_tt: number, ph: number, th: number, p: Vector3): RGB => mul(jitter(hc, p, 0.03), 0.94 + 0.06 * Math.sin(ph * 5 + th * 3) - 0.1 * smooth(2.4, 2.95, th));
     shell(bd, headFn, {
-      rows: 9, segs: 20, th0: () => 0,
+      rows: 7, segs: lean ? 16 : 18, th0: () => 0, colMap: (u) => { const k = 2 * u - 1; return 0.5 + 0.5 * Math.sign(k) * Math.pow(Math.abs(k), 0.8); },
       th1: hl([[0, saf ? 1.02 : 1.1], [0.45, saf ? 1.1 : 1.18], [0.75, 1.5], [0.92, 2.2], [1.08, 2.8], [1.25, 2.95], [Math.PI, 2.95]]),
-      off: (tt, ph) => h(0.011) + h(0.003) * Math.sin(ph * 5) * tt + h(0.003) * smooth(0.8, 1, tt) * Math.max(0, Math.cos(ph)),
+      // the face opening's rim lies on the skin (no gap to look through); folds grow toward the crown
+      off: (tt, ph) => h(0.012) * (1 - 0.72 * smooth(0.7, 1, tt) * smooth(-0.3, 0.3, Math.cos(ph))) + h(0.003) * Math.sin(ph * 5) * tt * (1 - smooth(0.8, 1, tt)),
       col: fabric, bind: BONE.head, rough: R.silk, uv: (tt, ju) => cellUV(CELL.hijab, ju, 1 - tt),
     });
     topY = headC.y + hr.y + h(0.012);
-    // drape: from the throat over the shoulders; longer at the front, soft folds
-    const drop = h(saf ? 0.1 : 0.055);
+    // drape: from under the chin over the shoulders; longer at the front and back, a soft rounded hem
+    const drop = h(saf ? 0.11 : 0.075);
     const yBot = h(saf ? 0.73 : 0.772);
-    const sBot = torso(yBot), s81 = torso(h(0.81));
     const jx = jk ? h(jk.kind === 'leather' || jk.kind === 'bomber' ? 0.02 : 0.017) : 0; // clear the jacket
-    const shoulderCover = shoulderX + h(0.03) + jx;
+    const shoulderCover = shoulderX + h(0.032) + jx;
     const yTopD = headC.y - hr.y * 0.9;
     const duv: UvFn = (u, p) => cellUV(CELL.hijab, u, 1 - 0.7 * clamp((p.y - yBot) / (yTopD - yBot), 0, 1));
+    // [y, rx, rzf, rzb, cz, bind, hang 0..1 (how much of the hem drop / folds this ring gets)]
+    const at = (y: number, ex: number, ez: number, cover: number) => { const s = torso(y); return [y, Math.max(s.rx + ex + jx, cover), s.rzf + ez + jx, s.rzb + ez * 0.8 + jx] as const; };
     const specs: [number, number, number, number, number, Bind, number][] = [
-      [yBot, Math.max(sBot.rx + h(0.012) + jx, shoulderCover * 0.92), sBot.rzf + h(0.014) + jx, sBot.rzb + h(0.011) + jx, 0, BONE.chest, 1],
-      [h(0.81), Math.max(s81.rx + h(0.014) + jx, shoulderCover), s81.rzf + h(0.018) + jx, s81.rzb + h(0.014) + jx, 0, BONE.chest, 0.7],
-      [h(0.838), neckR + h(0.024), neckR + h(0.028), neckR + h(0.02), neckZ, blend(BONE.neck, BONE.head, 0.4), 0.3],
-      [yTopD, hr.x * 0.82, hr.zf * 0.58, hr.zb * 0.72, headC.z + h(0.004), BONE.head, 0],
+      [...at(yBot, h(0.013), h(0.015), shoulderCover * 0.95), 0, BONE.chest, 1],
+      [...at(lerp(yBot, h(0.806), 0.5), h(0.014), h(0.017), shoulderCover * 0.99), 0, BONE.chest, 0.75],
+      [...at(h(0.806), h(0.014), h(0.018), shoulderCover * 0.97), 0, BONE.chest, 0.5],
+      // rounds the fabric over the top of the shoulder instead of a shelf with a corner
+      [h(0.821), lerp(neckR * 1.12 + h(0.03), shoulderCover, 0.62), neckR * 1.12 + h(0.036), neckR * 1.12 + h(0.03), neckZ * 0.5, BONE.chest, 0.3],
+      [h(0.834), neckR * 1.12 + h(0.026), neckR * 1.12 + h(0.028), neckR * 1.12 + h(0.022), neckZ, blend(BONE.chest, BONE.neck, 0.5), 0.12],
+      [h(0.845), neckR * 1.12 + h(0.016), neckR * 1.12 + h(0.02), neckR * 1.12 + h(0.012), neckZ, blend(BONE.neck, BONE.head, 0.45), 0],
+      [yTopD, hr.x * 0.82, hr.zf * 0.6, hr.zb * 0.72, headC.z + h(0.004), BONE.head, 0],
     ];
+    const hemDy = (az: number) => -drop * (0.3 + 0.7 * (0.5 + 0.5 * Math.cos(2 * az))) * (0.85 + 0.15 * Math.cos(az));
     const ringsD = specs.map(([y, rx, rzf, rzb, cz, b, k]) => {
-      const rr = ring(y, rx, rzf, rzb, (az, p) => mul(jitter(hc, p, 0.03), (k === 1 ? 0.9 : 0.97) - 0.1 * Math.max(0, Math.sin(az * 6 + 1)) * k), b, R.silk, { cz, sq: k > 0.5 ? 2.25 : 2.1, uv: duv });
-      if (k > 0.5) {
-        const dy = (az: number) => -drop * Math.pow(Math.max(0, Math.cos(az)), 1.5) * k - h(0.012) * k;
+      const rr = ring(y, rx, rzf, rzb, (az, p) => mul(jitter(hc, p, 0.03), (k === 1 ? 0.9 : 0.97) - 0.08 * Math.max(0, Math.sin(az * 7 + 1)) * k), b, R.silk, { cz, sq: 2.15, uv: duv });
+      if (k > 0) {
+        const dy = (az: number) => hemDy(az) * k * k;
         rr.dy = dy;
-        // the front hangs lower, over the bust: grow the radius by how much the body widens there
+        // soft folds; the front and back hang lower, over the bust / shoulder blades: grow the radius by
+        // how much the body widens there
         rr.dr = (az) => {
-          const c = Math.max(0, Math.cos(az));
-          return h(0.007) * Math.sin(az * 6 + 1) * k + Math.max(0, torso(y + dy(az)).rzf - torso(y).rzf) * c;
+          const a = torso(y + dy(az)), b = torso(y), c = Math.cos(az);
+          return h(0.006) * Math.sin(az * 7 + 1) * k + Math.max(0, a.rzf - b.rzf) * Math.max(0, c) + Math.max(0, a.rzb - b.rzb) * Math.max(0, -c);
         };
       }
       return rr;
     });
     const b0 = ringsD[0];
-    const lipD = ring(b0.y + h(0.006), b0.rx - h(0.006), b0.rzf - h(0.006), b0.rzb - h(0.006), mul(hc, 0.55), BONE.chest, R.silk, { sq: 2.2, uv: duv });
+    const lipD = ring(b0.y + h(0.005), b0.rx - h(0.005), b0.rzf - h(0.005), b0.rzb - h(0.005), mul(hc, 0.6), BONE.chest, R.silk, { sq: 2.15, uv: duv });
     lipD.dy = b0.dy; lipD.dr = b0.dr;
-    loft(bd, [lipD, ...ringsD], 16);
+    loft(bd, [lipD, ...ringsD], lean ? 16 : 18);
   }
   if (t.headwear === 'chechia') {
     const y0 = headC.y + hr.y * 0.42, y1 = headC.y + hr.y + h(0.012);
@@ -761,14 +830,13 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const rows = [[0.582, 0.8, 0.7], [0.592, 1, 1], [0.68, 1, 1.02], [0.76, 1, 1], [0.785, 0.85, 0.8], [0.795, 0.55, 0.5]] as const;
     const buv: UvFn = (u, p) => cellUV(CELL.bag, u, span(0.585, 0.795, p.y));
     loft(bd, rows.map(([y, k, kd]) => ring(h(y), bw * k, depth * kd * 1.05, depth * kd, (_az, p) => mul(jitter(bc, p, 0.03), p.y < h(0.6) ? 0.78 : 1), blend(BONE.spine, BONE.chest, smooth(0.6, 0.7, y)), 0.66, { cz, sq: 4, uv: buv })), 8, { capStart: true, capEnd: true });
+    // straps: down the front of the chest into the armpit (the arm hides the end), and from the
+    // shoulder down the back into the pack; they ride on the chest, so arm swing never crosses them
     for (const s of [1, -1] as const) {
-      const x = s * (neckR + h(0.028));
-      const pts: Vector3[] = [];
-      for (const y of [0.64, 0.7, 0.75, 0.785]) { const az = s * lerp(1.15, 0.62, smooth(0.64, 0.785, y)); pts.push(torsoSurf(h(y), az, h(0.004))); }
-      pts.push(new Vector3(x, h(0.828), -h(0.005)));
-      pts.push(torsoSurf(h(0.79), s * (Math.PI - 0.55), h(0.004)));
-      pts.push(new Vector3(x * 0.9, h(0.775), cz + depth * 0.4));
-      sweep(bd, pts, (i) => (i === 4 ? new Vector3(0, 1, 0) : new Vector3(pts[i].x * 0.3, 0, pts[i].z).normalize()), h(0.011), h(0.0022), mul(bc, 0.8), BONE.chest, 0.66);
+      const top = new Vector3(s * (neckR + h(0.03)), h(0.829), -h(0.006));
+      const front = [top, ...[0.8, 0.765, 0.73, 0.7].map((y) => torsoSurf(h(y), s * lerp(0.5, 0.78, smooth(0.8, 0.7, y)), h(0.0035)))];
+      const backS = [top, torsoSurf(h(0.8), s * (Math.PI - 0.6), h(0.0035)), new Vector3(s * bw * 0.55, h(0.78), cz + depth * 0.5)];
+      for (const pts of [front, backS]) sweep(bd, pts, (i) => (i === 0 ? new Vector3(0, 1, 0) : new Vector3(pts[i].x * 0.3, 0, pts[i].z).normalize()), h(0.01), h(0.0018), mul(bc, 0.82), BONE.chest, 0.66);
     }
     part('backpack');
   }
@@ -807,8 +875,8 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     for (const s of [1, -1] as const) {
       const c = hp(FACE.eye.th, s * FACE.eye.ph, h(0.007));
       const loop: Vector3[] = [];
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2 + Math.PI / 2;
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + Math.PI / 2;
         loop.push(new Vector3(c.x + Math.cos(a) * h(0.0165), c.y + Math.sin(a) * h(0.0115), c.z - Math.max(0, s * Math.cos(a)) * h(0.004)));
       }
       sweep(bd, loop, () => new Vector3(0, 0, 1), h(0.0012), h(0.0012), frame, BONE.head, 0.3, true);
@@ -827,8 +895,8 @@ export function buildBody(t: Traits, lean = false): BodyResult {
     const g = J[BONE.cup];
     const cz = g.z + h(0.02);
     // espresso cup beside the fist; its bone is kept upright by the animator
-    const rows = [[-0.032, 0.022], [-0.026, 0.028], [0.022, 0.034], [0.017, 0.03]] as const;
-    loft(bd, rows.map(([dy, rr], i) => ring(g.y + dy, rr, rr, rr, i === 3 ? [0.09, 0.05, 0.025] : [0.86, 0.85, 0.82], BONE.cup, R.porcelain, { cx: g.x, cz })), 6, { capStart: true, capEnd: true });
+    const rows = [[-0.032, 0.023], [0.022, 0.034], [0.017, 0.03]] as const;
+    loft(bd, rows.map(([dy, rr], i) => ring(g.y + dy, rr, rr, rr, i === 2 ? [0.09, 0.05, 0.025] : [0.86, 0.85, 0.82], BONE.cup, R.porcelain, { cx: g.x, cz })), 6, { capStart: true, capEnd: true });
     // crumpled wrapper for litterbugs
     const tg = J[BONE.trash];
     const tc: RGB = r() < 0.5 ? rgb(0xd83a2a) : r() < 0.5 ? rgb(0xe8c23a) : [0.85, 0.85, 0.82];

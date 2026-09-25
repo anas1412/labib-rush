@@ -9,6 +9,7 @@ type EventKind = 'car' | 'moped' | 'horn' | 'birds' | 'clink';
 
 /** Mean gap (s) between events of each kind; actual gaps are randomised ±60 %. */
 const GAP: Record<EventKind, number> = { car: 5, moped: 17, horn: 22, birds: 11, clink: 7 };
+const KINDS = Object.keys(GAP) as EventKind[];
 
 export class Ambience {
   private readonly out: GainNode;
@@ -50,7 +51,7 @@ export class Ambience {
     for (const s of this.beds) s.start(at);
     bus.gain.setValueAtTime(0, at);
     bus.gain.linearRampToValueAtTime(1, at + 2);
-    for (const k of Object.keys(GAP) as EventKind[]) this.nextAt[k] = at + rnd(0.5, 1) * GAP[k];
+    for (const k of KINDS) this.nextAt[k] = at + rnd(0.5, 1) * GAP[k];
   }
 
   stop(fadeSec = 1.5): void {
@@ -67,12 +68,12 @@ export class Ambience {
 
   setPaused(p: boolean): void {
     this.paused = p;
-    if (!p) { const now = this.ctx.currentTime; for (const k of Object.keys(GAP) as EventKind[]) this.nextAt[k] = Math.max(this.nextAt[k], now + 0.5); }
+    if (!p) { const now = this.ctx.currentTime; for (const k of KINDS) this.nextAt[k] = Math.max(this.nextAt[k], now + 0.5); }
   }
 
   schedule(until: number): void {
     if (!this.running || this.paused) return;
-    for (const k of Object.keys(GAP) as EventKind[]) {
+    for (const k of KINDS) {
       while (this.nextAt[k] < until) {
         this.fire(k, this.nextAt[k]);
         this.nextAt[k] += GAP[k] * rnd(0.4, 1.6);

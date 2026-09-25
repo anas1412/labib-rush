@@ -28,7 +28,7 @@ export interface BuildingMaterials {
   dispose(): void;
 }
 
-/** Window kinds stored in aExt.w of the glass buffer. */
+/** Window kinds stored in aExt.w of the glass buffer (shop panes add 0.2 / 0.4 for their interior type). */
 export const WIN = { FRENCH: 0, SHOP: 1, MODERN: 2, CAFE: 3, FANLIGHT: 4, SMALL: 5 } as const;
 
 const NOISE = /* glsl */ `
@@ -51,6 +51,14 @@ sC = directionalLights[0].color; sD = directionalLights[0].direction;
 #endif
 vec3 sDW = normalize((vec4(sD, 0.0) * viewMatrix).xyz);
 `;
+
+/** Shadow lookups (5-tap PCF per cascade) only where the sun can reach: surfaces facing away from
+ *  it (the whole south row, east walls) get no direct light anyway. Exact, no visual change. */
+const FACING_SHADOWS = ShaderChunk.lights_fragment_begin.replaceAll(
+  '( directLight.visible && receiveShadow )',
+  '( directLight.visible && receiveShadow && dot( geometryNormal, directLight.direction ) > 0.0 )',
+);
+if (FACING_SHADOWS === ShaderChunk.lights_fragment_begin) throw new Error('buildings: lights_fragment_begin changed, update FACING_SHADOWS');
 
 /** far = cheap variant for distant LOD chunks: no weathering noise, no normal mapping. */
 const CHEAP_IBL = ShaderChunk.lights_fragment_maps.replace(
@@ -139,15 +147,17 @@ if (vExt.y > 0.0 && bMid > 0.0) {
       .replace('#include <roughnessmap_fragment>', `float roughnessFactor = clamp(bNrmT.z * bLp.z + bGrime * 0.1, 0.05, 1.0);`)
       // plaster/stone are rough: the prefiltered specular env lookup is replaced by the diffuse
       // irradiance already fetched (saves one PMREM lookup per pixel, visually equivalent here)
+      .replace('#include <lights_fragment_begin>', FACING_SHADOWS)
       .replace('#include <lights_fragment_maps>', CHEAP_IBL)
       // The sky-only IBL has no street wall across the avenue: walls facing away from the sun get
-      // the bounce of the sunlit wall opposite them (albedo ≈ 0.75 filling ≈ 22 % of their view).
+      // the bounce of the sunlit wall opposite them (it fills ≈ 22 % of their view; average albedo
+      // ≈ 0.5 with its windows and shopfronts).
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
 {
   ${SUN}
   vec3 bN = normalize(vWNrm);
   float bOpp = max(0.0, -dot(sDW, bN)) * (1.0 - abs(bN.y));
-  reflectedLight.indirectDiffuse += sC * (bOpp * 0.16) * BRDF_Lambert(material.diffuseColor);
+  reflectedLight.indirectDiffuse += sC * (bOpp * 0.11) * BRDF_Lambert(material.diffuseColor);
 }`)
       .replace('#include <normal_fragment_maps>', `
 #ifndef BLD_FAR
@@ -221,11 +231,11 @@ vec3 goodsCol(vec2 cell, float seed) {
   if (g < 0.86) return vec3(0.12, 0.12, 0.13);
   return vec3(0.68, 0.58, 0.54);
 }
-// Shop walls, by shop type (from the pane seed): s = metres along the wall, fy = height above the
-// floor. 0: stocked shelves (grocery, books, chemist), 1: boutique (sparse lit niches on a pale
-// wall), 2: clothes on rails with folded stock above.
-vec3 shopWall(float s, float fy, float seed, vec3 wall) {
-  float type = floor(h1(seed * 41.0) * 3.0);
+// Shop walls by interior type (from the shop kind, encoded in the pane kind: see facade.ts
+// SHOP_INTERIOR): s = metres along the wall, fy = height above the floor. 0: stocked shelves (books,
+// pastries, chemist, newsagent), 1: boutique (sparse lit niches on a pale wall), 2: clothes on rails
+// with folded stock above.
+vec3 shopWall(float s, float fy, float seed, vec3 wall, float type) {
   if (type > 1.5) {
     if (fy > 1.78 && fy < 1.82) return vec3(0.35, 0.34, 0.33); // rail
     if (fy > 0.7 && fy < 1.76) {
@@ -257,6 +267,7 @@ vec3 roomColor(vec2 wm, float W, float H, float kind, float seed, vec3 V, vec3 T
   r.z = max(r.z, 1e-3);
   bool cafe = kind > 2.5 && kind < 3.5;
   bool shop = (kind > 0.5 && kind < 1.5) || cafe;
+  float stype = floor((kind - 0.95) * 5.0); // WIN.SHOP + 0 / 0.2 / 0.4 → 0 / 1 / 2
   float D = shop ? mix(6.0, 10.0, h1(seed * 3.1)) : mix(3.4, 5.5, h1(seed * 7.1));
   float ex = shop ? 0.3 : mix(0.8, 2.0, h1(seed * 5.7));
   float yb = kind < 0.5 ? 0.06 : kind > 4.5 ? 0.9 : shop ? 0.5 : 0.85;
@@ -323,12 +334,12 @@ vec3 roomColor(vec2 wm, float W, float H, float kind, float seed, vec3 V, vec3 T
     }
   }
   if (gondola) {
-    col = fy > 1.38 ? vec3(0.3, 0.28, 0.26) : shopWall(h.x, fy + 0.12, seed + 3.0, vec3(0.35, 0.34, 0.33));
+    col = fy > 1.38 ? vec3(0.3, 0.28, 0.26) : shopWall(h.x, fy + 0.12, seed + 3.0, vec3(0.35, 0.34, 0.33), stype);
   } else if (t == tz) {
     col = wall;
     if (shop && !cafe) {
       // stocked shelving along the back wall, a counter in front of one side
-      col = shopWall(h.x, fy, seed, wall);
+      col = shopWall(h.x, fy, seed, wall, stype);
       if (fy < 1.0 && xr > 0.62 && xr < 0.92) col = vec3(0.3, 0.21, 0.15) * (0.85 + 0.15 * step(0.9, fy));
     } else if (cafe) {
       // wood panelling, a mirror band reflecting the warm room, cornice
@@ -343,7 +354,7 @@ vec3 roomColor(vec2 wm, float W, float H, float kind, float seed, vec3 V, vec3 T
   } else if (t == tx) {
     col = wall * 0.8;
     if (cafe) col = fy < 1.1 ? vec3(0.28, 0.18, 0.11) : vec3(0.62, 0.52, 0.4);
-    else if (shop) col = shopWall(h.z + 7.0, fy, seed + 1.0, wall);
+    else if (shop) col = shopWall(h.z + 7.0, fy, seed + 1.0, wall, stype);
     else if (h1(seed * 31.0) > 0.5 && fy < 2.0 && abs(fract(h.z * 0.35 + fx) - 0.5) < 0.2) {
       // bookcase
       float bk = h1(floor(h.z * 12.0) + floor(fy * 3.0) * 7.0);
@@ -409,6 +420,7 @@ if (gKind < 0.5) {
 diffuseColor.rgb = vColor.rgb * gFrame;
 `)
       .replace('#include <roughnessmap_fragment>', `float roughnessFactor = mix(0.03 + 0.1 * h1(gSeed * 3.7), 0.5, gFrame);`)
+      .replace('#include <lights_fragment_begin>', FACING_SHADOWS)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
 {
   vec3 N = normalize(vWNrm);
@@ -496,6 +508,8 @@ if (aExt.x > 0.0) {
     // it (aExt.yzw: shaded wall, dark glass…), the gaps filling in by coverage (no pop, no dither).
     // Foliage (aExt.x > 0, it sways) stays alpha-tested in its own colour at every distance.
     sh.fragmentShader = sh.fragmentShader
+      .replace('#include <lights_fragment_begin>', FACING_SHADOWS)
+      .replace('#include <lights_fragment_maps>', CHEAP_IBL) // rough iron and leaves: no env reflection fetch
       .replace('#include <common>', `#include <common>
 varying vec4 vCut;`)
       .replace('#include <alphatest_fragment>', `{

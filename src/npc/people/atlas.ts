@@ -1,5 +1,5 @@
 // Shared procedural detail atlas for the whole crowd, painted once at load on 2D canvases (no
-// downloaded assets). 8 × 4 cells: painted faces, hair strands, skin, and garment construction
+// downloaded assets). 8 × 5 cells: painted faces, hair strands, skin, and garment construction
 // (seams, stitching, pockets, buttons, folds) for every clothing kind. Two textures come out:
 //  - decal (sRGB RGBA): colour + coverage of painted features that REPLACE the vertex colour
 //    (eyes, brows, lash lines, lips, drawstrings, topstitching, zips…)
@@ -12,7 +12,7 @@ import { setNeutralUv } from './geometry';
 import { FACE, FACE_K, HEAD_ASPECT, faceXY } from './head';
 import { rng, type Rng } from './traits';
 
-export const COLS = 8, ROWS = 4;
+export const COLS = 8, ROWS = 5;
 /** Gutter around each cell's content, as a fraction of the cell (mip / filtering safety). */
 const GUT = 8 / 256;
 
@@ -21,6 +21,7 @@ export const CELL = {
   skin: 8, hand: 9, tee: 10, shirt: 11, polo: 12, knit: 13, hoodie: 14, blouse: 15,
   suit: 16, leather: 17, bomber: 18, denimJk: 19, cardigan: 20, robe: 21, skirt: 22, hijab: 23,
   jeansLeg: 24, trouserLeg: 25, jeansHips: 26, trouserHips: 27, sleeve: 28, sneaker: 29, shoe: 30, bag: 31,
+  faceM3: 32, faceM4: 33, faceF3: 34, faceF4: 35, faceOldM2: 36, faceOldF2: 37,
 } as const;
 export type CellId = (typeof CELL)[keyof typeof CELL];
 
@@ -186,7 +187,15 @@ const FACES: Record<number, FaceStyle> = {
   [CELL.faceF2]: { female: true, old: false, iris: ['#644028', '#301c10', '#140a05'], brow: '#1c130d', browW: 1.0, browArch: 0.05, browA: 0.92, eyeW: 1.2, eyeH: 1.06, lash: 0.04, liner: 0.85, lip: '#8c3844', lipA: 0.55, lipFull: 1.05, blush: 0.09 },
   [CELL.faceOldM]: { female: false, old: true, iris: ['#6e5c48', '#403226', '#1c1610'], brow: '#9c958c', browW: 1.5, browArch: 0.0, browA: 0.9, eyeW: 1.1, eyeH: 0.86, lash: 0.024, liner: 0, lip: '#90605a', lipA: 0.2, lipFull: 0.72, blush: 0.03 },
   [CELL.faceOldF]: { female: true, old: true, iris: ['#6e4c32', '#3c2818', '#1a100a'], brow: '#4c3e35', browW: 0.9, browArch: 0.03, browA: 0.88, eyeW: 1.14, eyeH: 0.92, lash: 0.03, liner: 0.35, lip: '#984a52', lipA: 0.34, lipFull: 0.84, blush: 0.07 },
+  [CELL.faceM3]: { female: false, old: false, iris: ['#4a3020', '#241509', '#0c0704'], brow: '#17100b', browW: 1.6, browArch: 0.01, browA: 0.94, eyeW: 1.05, eyeH: 0.86, lash: 0.03, liner: 0, lip: '#8a4a44', lipA: 0.3, lipFull: 1.05, blush: 0.05 },
+  [CELL.faceM4]: { female: false, old: false, iris: ['#8a8450', '#5a562c', '#2a2814'], brow: '#3a2a1a', browW: 1.2, browArch: 0.03, browA: 0.9, eyeW: 1.15, eyeH: 0.96, lash: 0.028, liner: 0, lip: '#a0605a', lipA: 0.26, lipFull: 0.85, blush: 0.06 },
+  [CELL.faceF3]: { female: true, old: false, iris: ['#9a7040', '#5e3e1e', '#2a180a'], brow: '#20140c', browW: 1.05, browArch: 0.06, browA: 0.92, eyeW: 1.18, eyeH: 1.02, lash: 0.042, liner: 0.5, lip: '#c05a60', lipA: 0.6, lipFull: 1.2, blush: 0.12 },
+  [CELL.faceF4]: { female: true, old: false, iris: ['#503420', '#2a180c', '#100804'], brow: '#2a1c12', browW: 0.85, browArch: 0.035, browA: 0.9, eyeW: 1.25, eyeH: 1.14, lash: 0.036, liner: 0.1, lip: '#a8545a', lipA: 0.42, lipFull: 0.95, blush: 0.1 },
+  [CELL.faceOldM2]: { female: false, old: true, iris: ['#5a4a3a', '#342a20', '#18120c'], brow: '#cfc8bf', browW: 1.3, browArch: 0.01, browA: 0.9, eyeW: 1.05, eyeH: 0.8, lash: 0.022, liner: 0, lip: '#8a5a54', lipA: 0.18, lipFull: 0.7, blush: 0.04 },
+  [CELL.faceOldF2]: { female: true, old: true, iris: ['#6a5040', '#3a2a1e', '#1a120c'], brow: '#6a5a4e', browW: 0.8, browArch: 0.035, browA: 0.88, eyeW: 1.1, eyeH: 0.88, lash: 0.028, liner: 0.2, lip: '#a05560', lipA: 0.3, lipFull: 0.8, blush: 0.08 },
 };
+/** Stylised (Pixar-leaning) eyes: larger than life so faces read at street distances. */
+const EYE_W = 1.22, EYE_H = 1.3;
 
 function bez(g: G2, a: Pt, c1: Pt, c2: Pt, b: Pt, start = true): void {
   if (start) g.moveTo(a[0], a[1]);
@@ -209,7 +218,7 @@ function paintFace(p: Pen, st: FaceStyle): void {
 
   for (const s of [1, -1] as const) {
     const P = (lx: number, ly: number): Pt => [s * (ex + lx), ey + ly];
-    const w = st.eyeW, hgt = st.eyeH;
+    const w = st.eyeW * EYE_W, hgt = st.eyeH * EYE_H;
     const I = P(-0.15 * w, -0.004), O = P(0.165 * w, 0.016);
     const U1 = P(-0.085 * w, 0.09 * hgt), U2 = P(0.085 * w, 0.1 * hgt);
     const L1 = P(0.09 * w, -0.058 * hgt), L2 = P(-0.075 * w, -0.066 * hgt);
@@ -282,9 +291,10 @@ function paintFace(p: Pen, st: FaceStyle): void {
 
     // brow: tapered body + hair strokes
     const bw = 0.055 * st.browW;
-    const b0 = P(-0.17, 0.19), bm = P(0.05, 0.24 + st.browArch), b1 = P(0.25, 0.19 + st.browArch * 0.3);
+    const B = 0.035; // brows sit a little higher over the stylised eyes
+    const b0 = P(-0.19, 0.19 + B), bm = P(0.05, 0.245 + B + st.browArch), b1 = P(0.28, 0.19 + B + st.browArch * 0.3);
     const top = smoothPts([b0, bm, b1], 5);
-    const bot = smoothPts([P(-0.165, 0.19 - bw), P(0.05, 0.24 + st.browArch - bw * 0.62), P(0.24, 0.187 + st.browArch * 0.3 - bw * 0.15)], 5).reverse();
+    const bot = smoothPts([P(-0.185, 0.19 + B - bw), P(0.05, 0.245 + B + st.browArch - bw * 0.62), P(0.27, 0.187 + B + st.browArch * 0.3 - bw * 0.15)], 5).reverse();
     fill(dec, [...top, ...bot], st.brow, st.browA * 0.75);
     for (let k = 0; k < 46; k++) {
       const t = p.r();
@@ -315,8 +325,11 @@ function paintFace(p: Pen, st: FaceStyle): void {
   // soft contouring: cheek hollows, jaw sides and temples a touch darker; forehead, cheekbones and
   // chin catch light (reads as bounce light / subsurface on the simple head)
   for (const s of [1, -1]) {
-    soft(sh, smoothPts([[s * 0.82, ey + 0.35], [s * 0.9, ey - 0.2], [s * 0.72, my - 0.25], [s * 0.35, my - 0.5]]), 0.3, K, 0.1);
-    spot(sh, s * 0.55, ey - 0.5, 0.18, '0,0,0', 0.06);
+    // temples; men also get a soft shadow along the jaw (women's faces stay clean: a jaw arc reads
+    // as beard shadow)
+    if (st.female) soft(sh, smoothPts([[s * 0.82, ey + 0.35], [s * 0.9, ey - 0.12]]), 0.3, K, 0.08);
+    else soft(sh, smoothPts([[s * 0.82, ey + 0.35], [s * 0.9, ey - 0.2], [s * 0.72, my - 0.25], [s * 0.35, my - 0.5]]), 0.3, K, 0.06);
+    spot(sh, s * 0.55, ey - 0.5, 0.18, '0,0,0', st.female ? 0.03 : 0.06);
     spot(sh, s * 0.5, ey - 0.2, 0.16, '255,255,255', 0.07);
   }
   spot(sh, 0, ey + 0.55, 0.35, '255,255,255', 0.06, 0.6);
@@ -694,13 +707,13 @@ function hipsCommon(p: Pen, jeans: boolean): void {
   const fly = smoothPts([[0.53, wb0], [0.53, vh(-0.085)], [0.515, vh(-0.1)], [0.5, vh(-0.105)]], 4);
   seam(p, [[0.5, wb0], [0.5, vh(-0.105)]], 0.45, 0.005);
   stitch(p, fly, gold);
-  soft(p.sh, [[0.5, vh(-0.06)], [0.5, vh(-0.14)]], 0.02, K, 0.25);
-  // crotch whiskers
+  soft(p.sh, [[0.5, vh(-0.07)], [0.5, vh(-0.13)]], 0.014, K, 0.14);
+  // crotch whiskers: creases only (no highlight puffs, which read as a bulge)
   if (jeans) {
     for (const s of [1, -1]) {
-      for (let i = 0; i < 4; i++) {
-        const pts: Pt[] = [[0.5 + s * 0.02, vh(-0.105 - i * 0.012)], [0.5 + s * (0.1 + i * 0.015), vh(-0.07 - i * 0.02)]];
-        puff(p, pts, 0.012, 0.12);
+      for (let i = 0; i < 3; i++) {
+        const pts: Pt[] = [[0.5 + s * 0.03, vh(-0.11 - i * 0.012)], [0.5 + s * (0.1 + i * 0.015), vh(-0.075 - i * 0.02)]];
+        fold(p, pts, 0.01, 0.12);
       }
     }
   }
@@ -825,6 +838,8 @@ const face = (id: number): CellSpec => ({ paint: (p) => paintFace(p, FACES[id]),
 const SPECS: Record<CellId, CellSpec> = {
   [CELL.faceM]: face(CELL.faceM), [CELL.faceF]: face(CELL.faceF), [CELL.faceOldM]: face(CELL.faceOldM),
   [CELL.faceOldF]: face(CELL.faceOldF), [CELL.faceM2]: face(CELL.faceM2), [CELL.faceF2]: face(CELL.faceF2),
+  [CELL.faceM3]: face(CELL.faceM3), [CELL.faceM4]: face(CELL.faceM4), [CELL.faceF3]: face(CELL.faceF3),
+  [CELL.faceF4]: face(CELL.faceF4), [CELL.faceOldM2]: face(CELL.faceOldM2), [CELL.faceOldF2]: face(CELL.faceOldF2),
   [CELL.hair]: { paint: paintHair, wrap: true, micro: 'none', bump: 1.1 },
   [CELL.hairCurly]: { paint: paintCurly, wrap: true, micro: 'none', bump: 1.2 },
   [CELL.skin]: { paint: paintSkin, wrap: true, micro: 'skin', bump: 0.5 },
@@ -900,9 +915,17 @@ export interface PeopleAtlas {
 }
 
 /** Faces are chosen per person from these. */
-export const FACE_CELLS = { male: [CELL.faceM, CELL.faceM2], female: [CELL.faceF, CELL.faceF2], oldMale: CELL.faceOldM, oldFemale: CELL.faceOldF } as const;
+export const FACE_CELLS = {
+  male: [CELL.faceM, CELL.faceM2, CELL.faceM3, CELL.faceM4], female: [CELL.faceF, CELL.faceF2, CELL.faceF3, CELL.faceF4],
+  oldMale: [CELL.faceOldM, CELL.faceOldM2], oldFemale: [CELL.faceOldF, CELL.faceOldF2],
+} as const;
 
-export function createAtlas(quality: Quality, renderer: WebGLRenderer): PeopleAtlas {
+/** Lets the main thread breathe (loading screen animation / progress) between painting steps. */
+const yieldToMain = () => new Promise<void>((r) => setTimeout(r, 0));
+
+/** Paints the atlas in steps (one cell, or a band of pixel rows, per task) so a loading screen stays
+ *  responsive; `onProgress` gets 0..1. */
+export async function createAtlas(quality: Quality, renderer: WebGLRenderer, onProgress: (p01: number) => void = () => {}): Promise<PeopleAtlas> {
   const cs = quality === 'low' || quality === 'medium' ? 128 : 256;
   const AW = cs * COLS, AH = cs * ROWS;
   const gp = Math.round(GUT * cs), cw = cs - 2 * gp;
@@ -917,7 +940,16 @@ export function createAtlas(quality: Quality, renderer: WebGLRenderer): PeopleAt
   const dec = mk(), sh = mk(), ht = mk();
   for (const g of [sh, ht]) { g.fillStyle = 'rgb(128,128,128)'; g.fillRect(0, 0, AW, AH); }
 
+  // progress: painting ≈ 70 % of the time, the pixel passes the rest
+  const cells = Object.keys(SPECS).length;
+  let done = 0;
+  const bandRows = 128; // pixel rows per task in the passes below
+  const bands = Math.ceil(AH / bandRows) * 2 + 2;
+  let band = 0;
+  const step = async () => { band++; onProgress(0.7 + 0.3 * (band / bands)); await yieldToMain(); };
   for (const [key, spec] of Object.entries(SPECS)) {
+    onProgress(0.7 * (done++ / cells));
+    await yieldToMain();
     const cell = Number(key);
     const ox = (cell % COLS) * cs, oy = Math.floor(cell / COLS) * cs;
     for (const du of spec.wrap ? [-1, 0, 1] : [0]) {
@@ -940,12 +972,16 @@ export function createAtlas(quality: Quality, renderer: WebGLRenderer): PeopleAt
   const f = cs / 256;
   const nFine = noiseTile(cs, 1.6 * f, 0), nMid = noiseTile(cs, 7 * f, 31), nLow = noiseTile(cs, 22 * f, 5), nVeryLow = noiseTile(cs, 64 * f, 11);
   // height (with micro relief) and shade, both in texture order (row 0 = v 0 = canvas bottom)
+  // per-cell spec lookup (unused cells at the end of the grid stay blank)
+  const BLANK: CellSpec = { paint: () => {}, wrap: false, micro: 'none', bump: 0 };
+  const specOf: CellSpec[] = Array.from({ length: COLS * ROWS }, (_, i) => SPECS[i as CellId] ?? BLANK);
   const hgt = new Float32Array(AW * AH), shade = new Float32Array(AW * AH);
   for (let y = 0; y < AH; y++) {
+    if (y % bandRows === 0) await step();
     const ty = (AH - 1 - y) * AW, row = Math.floor(y / cs) * COLS, ny = (y % cs) * cs;
     const v = 1 - ((y % cs) - gp) / cw;
     for (let x = 0; x < AW; x++) {
-      const spec = SPECS[(row + Math.floor(x / cs)) as CellId];
+      const spec = specOf[row + Math.floor(x / cs)];
       const ci = (y * AW + x) * 4, ni = ny + (x % cs);
       const u = ((x % cs) - gp) / cw;
       hgt[ty + x] = hImg[ci] / 255 + micro(spec.micro, u, v, nFine[ni], nMid[ni], f) * 0.035;
@@ -955,6 +991,7 @@ export function createAtlas(quality: Quality, renderer: WebGLRenderer): PeopleAt
   // light blur so painted strokes read as soft seams and folds rather than scratches
   const tmp = new Float32Array(AW * AH);
   for (let pass = 0; pass < 2; pass++) {
+    await step();
     for (let y = 0; y < AH; y++) {
       const r0 = y * AW;
       tmp[r0] = hgt[r0]; tmp[r0 + AW - 1] = hgt[r0 + AW - 1];
@@ -970,6 +1007,7 @@ export function createAtlas(quality: Quality, renderer: WebGLRenderer): PeopleAt
   const bump = new Float32Array(COLS * ROWS);
   for (const [key, spec] of Object.entries(SPECS)) bump[Number(key)] = 6 * f * spec.bump;
   for (let y = 0; y < AH; y++) {
+    if (y % bandRows === 0) await step();
     const cy = AH - 1 - y; // canvas row
     const yd = y > 0 ? y - 1 : y, yu = y < AH - 1 ? y + 1 : y, row = Math.floor(cy / cs) * COLS;
     for (let x = 0; x < AW; x++) {
@@ -1018,6 +1056,7 @@ export function createAtlas(quality: Quality, renderer: WebGLRenderer): PeopleAt
     t.needsUpdate = true;
     return t;
   };
+  onProgress(1);
   const decalTex = tex(decal, true), detailTex = tex(detail, false);
   decalTex.name = 'people-decal';
   detailTex.name = 'people-detail';

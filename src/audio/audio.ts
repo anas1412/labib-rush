@@ -114,7 +114,9 @@ export function createAudio(): AudioEngine {
     },
 
     play(name, opts) {
-      if (!ctx || !mix || ctx.state !== 'running') return;
+      // 'suspended' right after unlock(): resume() is still pending, and a sound scheduled now starts
+      // as soon as it resolves (so the click that unlocked audio is heard). A hidden tab stays silent.
+      if (!ctx || !mix || ctx.state === 'closed' || document.hidden) return;
       const ui = UI_SOUNDS.has(name);
       if (paused && !ui) return;
       const now = ctx.currentTime;

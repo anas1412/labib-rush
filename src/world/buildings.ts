@@ -26,8 +26,10 @@ import { buildBuilding, collider, hinterBlock, type Bufs, type ColliderBox } fro
 import { rng, range } from './buildings/rng';
 
 const CHUNK = 60;
-/** Camera distance (m, to the chunk's facade-line anchor) beyond which the far version is drawn. */
-const LOD_FAR = { low: 110, medium: 140, high: 170, ultra: 220 } as const;
+/** Camera distance (m, to the chunk's facade-line anchor) beyond which the far version is drawn.
+ *  Matches the engine's shadow range per preset: beyond it the near version's detail is mostly
+ *  sub-pixel triangles (measured ≈ 4 ms of shading waste at 170 m on the target iGPU). */
+const LOD_FAR = { low: 100, medium: 100, high: 130, ultra: 180 } as const;
 
 export interface BuildingsStats {
   buildings: number;
@@ -155,8 +157,6 @@ export async function buildBuildings(ctx: BuildContext): Promise<WorldPart & { s
       t += tris(mesh(bufs.sign, mats.signs, c.cx, c.cz, false, `bld-${key}-L${lvl}-signs`, grp));
       if (lvl === 0) trianglesNear += t;
       else trianglesFar += t;
-      // the far version starts beyond the engine's shadow range (130 m on high): skip the lookups
-      if (lvl === 1 && !low) grp.traverse((o) => { o.receiveShadow = false; });
       lod.addLevel(grp, lvl === 0 || low ? 0 : lodFar, 0.08); // 8 % hysteresis: no flicker at the boundary
     }
     // hinterland: one cheap mesh shared by both versions (a plain child, always drawn)

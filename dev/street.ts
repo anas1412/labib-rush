@@ -1,5 +1,7 @@
 // Street module preview: the street alone under the shared harness (no buildings/landmarks).
-// Also runs a floor-height self-check with physics raycasts (logged as [street-check]).
+// Self-check with physics raycasts (floors, bins, lanes, roofs, planter ledges, canopy, fences),
+// logged as [street-check] and kept in window.__streetCheck. Params: ?hide=name|prefix*,
+// ?far=1400 (game far plane), ?gpu=all,noTrees,… (GPU-timer A/B, window.__gpu), ?dispose.
 import * as THREE from 'three';
 import { createHarness } from './harness';
 import { buildStreet } from '../src/world/street';
@@ -76,50 +78,8 @@ for (const n of (new URLSearchParams(location.search).get('hide') ?? '').split('
   street.root.traverse((o) => { if (o.name === n || (n.endsWith('*') && o.name.startsWith(n.slice(0, -1)))) o.layers.set(31); });
 }
 
-let frames = 0;
-h.onFrame((dt, t) => {
-  frames++;
-  street.update?.(dt, t, h.camera.position);
-});
+h.onFrame((dt, t) => street.update?.(dt, t, h.camera.position));
 
-// ?bench: A/B frame rates with groups of meshes hidden (same page, so GPU contention from other
-// processes affects every variant alike). Result in window.__bench.
-if (new URLSearchParams(location.search).has('bench')) {
-  const byPrefix = (...p: string[]) => {
-    const list: THREE.Object3D[] = [];
-    street.root.traverse((o) => { if (p.some((x) => o.name.startsWith(x))) list.push(o); });
-    return list;
-  };
-  const trees = byPrefix('street-ficus', 'street-tree');
-  const props = byPrefix('street-iron', 'street-wood', 'street-lamp', 'street-cafe', 'street-kiosk', 'street-planter', 'street-hedges', 'street-flowers', 'street-galvanized', 'street-flag', 'street-sign', 'street-fence');
-  // variant = [name, hidden meshes, pixel ratio]; A/B pairs alternate to average out contention
-  // (a negative pixel ratio = same, but the shadow map is not re-rendered: shadow-pass cost)
-  const variants: [string, THREE.Object3D[], number][] = [];
-  const only = (q: string | null) => (q ? q.split(',') : ['all', 'halfRes', 'noShadowPass', 'noTrees', 'noProps']);
-  const pool: Record<string, [THREE.Object3D[], number]> = {
-    all: [[], 1], halfRes: [[], 0.5], noShadowPass: [[], -1], noTrees: [trees, 1], noProps: [props, 1],
-    noCards: [byPrefix('street-ficus-cards'), 1], noCore: [byPrefix('street-ficus-core'), 1], noTrunks: [byPrefix('street-ficus-trunks'), 1],
-    noGround: [byPrefix('street-asphalt', 'street-promenade', 'street-sidewalk', 'street-plaza', 'street-inlay', 'street-curb', 'street-paint', 'street-covers'), 1],
-  };
-  const names = only(new URLSearchParams(location.search).get('bench'));
-  for (let k = 0; k < 2; k++) for (const n of names) variants.push([n, ...pool[n]]);
-  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const out: Record<string, number> = {};
-  for (const [name, hide, pr] of variants) {
-    hide.forEach((o) => (o.visible = false));
-    h.renderer.setPixelRatio(Math.abs(pr));
-    h.renderer.shadowMap.autoUpdate = pr > 0;
-    await wait(500);
-    frames = 0;
-    const t0 = performance.now();
-    await wait(1500);
-    out[name] = (out[name] ?? 0) + Math.round((frames * 1000) / (performance.now() - t0)) / 2;
-    hide.forEach((o) => (o.visible = true));
-  }
-  h.renderer.setPixelRatio(1);
-  h.renderer.shadowMap.autoUpdate = true;
-  (window as unknown as { __bench: typeof out }).__bench = out;
-}
 // ?gpu=all,noTrees,…: GPU time of a whole frame (shadow + main pass) per variant from timer
 // queries; low percentiles are robust against other processes sharing the GPU. window.__gpu.
 if (new URLSearchParams(location.search).has('gpu')) {
@@ -147,7 +107,6 @@ if (new URLSearchParams(location.search).has('gpu')) {
   const coreM = (pool.noCore[0] as THREE.Mesh).material as THREE.MeshStandardMaterial, coreN = coreM.normalMap;
   const exp: Record<string, [() => void, () => void]> = {
     aniso2: [aniso(2), aniso(0)],
-    aniso4: [aniso(4), aniso(0)],
     aniso8: [aniso(8), aniso(0)],
     noShadowPass: [() => (h.renderer.shadowMap.autoUpdate = false), () => (h.renderer.shadowMap.autoUpdate = true)],
     noCoreShadow: [() => pool.noCore.forEach((o) => (o.castShadow = false)), () => pool.noCore.forEach((o) => (o.castShadow = true))],
@@ -155,10 +114,7 @@ if (new URLSearchParams(location.search).has('gpu')) {
     fullIbl: [() => fol.forEach((m) => { m.defines = { ...m.defines, ST_FULL_IBL: '' }; m.needsUpdate = true; }), () => fol.forEach((m) => { delete m.defines!.ST_FULL_IBL; m.needsUpdate = true; })],
     coreNoNormal: [() => { coreM.normalMap = null; coreM.needsUpdate = true; }, () => { coreM.normalMap = coreN; coreM.needsUpdate = true; }],
     cardsFirst: [() => pool.noCards.forEach((o) => (o.renderOrder = -1)), () => pool.noCards.forEach((o) => (o.renderOrder = 1))],
-    waterRough: [() => ((pool.noWater[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).roughness = 0.16, () => ((pool.noWater[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).roughness = 0.07],
     onlySky: [() => (street.root.visible = false), () => (street.root.visible = true)],
-    noGroundShadow: [() => pool.noGround.forEach((o) => (o.receiveShadow = false)), () => pool.noGround.forEach((o) => (o.receiveShadow = true))],
-    noGroundEnv: [() => groundMats.forEach((m) => { m.envMap = new THREE.Texture(); m.envMapIntensity = 0; m.needsUpdate = true; }), () => groundMats.forEach((m) => { m.envMap = null; m.envMapIntensity = 1; m.needsUpdate = true; })],
     halfRes: [() => h.renderer.setPixelRatio(0.5), () => h.renderer.setPixelRatio(1)],
     noGroundNormal: [() => groundMats.forEach((m) => { m.normalMap = null; m.needsUpdate = true; }), () => groundMats.forEach((m) => { m.normalMap = saved.get(m) ?? null; m.needsUpdate = true; })],
   };
@@ -193,7 +149,6 @@ if (new URLSearchParams(location.search).has('gpu')) {
         samples = [];
         await wait(1500);
         (acc[n] ??= []).push(...samples);
-        console.log(`[gpu] ${k} ${n} ${samples.length}`);
         (pool[n] ?? []).forEach((o) => (o.visible = true));
         exp[n]?.[1]();
       }

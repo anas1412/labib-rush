@@ -418,7 +418,7 @@ function runs(R: Rng, out: BuildingSpec[], r: RunSpec): void {
     }
     // flags: the hotel (several), most banks, some corner / domed buildings, the odd other one
     const bank = spec.shops.some((s) => s.kind === 'banque');
-    spec.flag = style === 'tower' || (detail === 0 && chance(R, bank ? 0.6 : isCorner || spec.dome ? 0.15 : 0.03));
+    spec.flag = style === 'tower' || (detail === 0 && chance(R, bank ? 0.7 : isCorner || spec.dome ? 0.3 : 0.1));
     out.push(spec);
   });
 }

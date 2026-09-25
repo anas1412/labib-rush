@@ -4,19 +4,21 @@
 // Params (besides the harness ones):
 //   ?anim=idle|walk|talk|cheer|sit|throw|startled|pickUp   lineup animation (one-shots repeat)
 //   ?seeds=0,1,2 (lineup seeds; default 0..11)  ?base=100 (seed offset)  ?speed=1.35 (walk)
+//   ?walkSeeds=…  ?cafeSeeds=… (6)  — defaults mix trousers with skirts, dresses and robes
 //   ?at=0.4   freeze `at` s after the (one-shot) start, after a deterministic 3 s warm-up
 //   ?from=sit  start the lineup in this loop, switch to ?anim after the warm-up (transition check)
 //   ?audit=500 (triangle budget over many seeds)  ?disposeTest=1 (GPU memory before/after 100 create+dispose)
 //   ?only=lineup|walk|cafe   ?stress=60 (a 60-person crowd walking, for perf)   ?engine=1 (game renderer)
 //   ?atlas=decal|normal|shade   overlay the shared detail atlas (debug the painters)
 //   ?cafeShot=throw|startled|pickUp   one-shot on the seated patrons (with ?at= to freeze)
+//   ?pickAudit=200   grip height at PICKUP_GRAB_SEC over many seeds (must be ≤ 0.1 m)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createHarness } from './harness';
 import { createEngine } from '../src/core/engine';
 import { Assets } from '../src/core/assets';
 import { Physics } from '../src/core/physics';
-import { SEAT_HEIGHT, createPeople, type PersonStats } from '../src/npc/people';
+import { PICKUP_GRAB_SEC, SEAT_HEIGHT, createPeople, type PersonStats } from '../src/npc/people';
 import type { BuildContext, Person, PersonAnim, Quality } from '../src/core/types';
 
 const params = new URLSearchParams(location.search);
@@ -106,9 +108,10 @@ if (show('lineup')) {
 
 // walking group on an oval behind the lineup
 if (show('walk')) {
-  const n = 7;
+  const ws = params.get('walkSeeds') ? params.get('walkSeeds')!.split(',').map(Number) : [200, 4, 201, 5, 17, 202, 26];
+  const n = ws.length;
   for (let i = 0; i < n; i++) {
-    const p = people.create(200 + i + base);
+    const p = people.create(ws[i] + base);
     h.scene.add(p.root);
     p.setAnim('walk');
     const sp = 1.15 + (i % 3) * 0.18;
@@ -127,6 +130,7 @@ if (show('walk')) {
 
 const cafe: Person[] = [];
 // café row: 3 tables, two patrons each facing across the table (street layout: chairs at ±0.55 m)
+const cafeSeeds = params.get('cafeSeeds') ? params.get('cafeSeeds')!.split(',').map(Number) : [2, 300, 4, 301, 5, 9];
 if (show('cafe')) {
   const wood = new THREE.MeshStandardMaterial({ color: 0x8a6a48, roughness: 0.7 });
   const metal = new THREE.MeshStandardMaterial({ color: 0x2a2a2c, roughness: 0.4, metalness: 0.8 });
@@ -156,7 +160,7 @@ if (show('cafe')) {
       chair.position.set(cx, 0, tz);
       chair.rotation.y = yaw;
       h.scene.add(chair);
-      const p = people.create(300 + k * 2 + (side > 0 ? 1 : 0) + base);
+      const p = people.create(cafeSeeds[k * 2 + (side > 0 ? 1 : 0)] + base);
       p.root.position.set(cx, 0, tz); // root = floor under the seat anchor (anchor.y − SEAT_HEIGHT)
       p.root.rotation.y = yaw;
       p.setAnim('sit');
@@ -201,6 +205,27 @@ if (params.get('audit')) {
   const audit = { n, maxTris: worst.tris, worstSeed: worst.seed, avgTris: Math.round(sum / n), msPerPerson: +((performance.now() - a0) / n).toFixed(2), withinBudget: worst.tris <= 3000, over };
   console.log('[people-audit]', JSON.stringify(audit));
   Object.assign(window, { __audit: audit });
+}
+
+// ?pickAudit=200: the pick-up must bring the held item (trash bone) down to the floor
+if (params.get('pickAudit')) {
+  const n = Number(params.get('pickAudit'));
+  const v = new THREE.Vector3();
+  let worst = { seed: -1, y: 0 }, sum = 0;
+  for (let i = 0; i < n; i++) {
+    const p = people.create(i);
+    p.update(1 / 60, 0);
+    p.setAnim('pickUp');
+    for (let t = 0; t < PICKUP_GRAB_SEC - 1e-6; t += 1 / 60) p.update(Math.min(1 / 60, PICKUP_GRAB_SEC - t), 0);
+    p.root.updateMatrixWorld(true);
+    (p.root.children[0] as THREE.SkinnedMesh).skeleton.bones[18].getWorldPosition(v);
+    sum += v.y;
+    if (v.y > worst.y) worst = { seed: i, y: v.y };
+    p.dispose();
+  }
+  const res = { n, maxY: +worst.y.toFixed(3), worstSeed: worst.seed, avgY: +(sum / n).toFixed(3), ok: worst.y <= 0.1 };
+  console.log('[people-pick]', JSON.stringify(res));
+  Object.assign(window, { __pick: res });
 }
 
 const stats = all.map(({ p }) => p.root.userData.people as PersonStats);

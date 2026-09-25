@@ -15,7 +15,7 @@ OpenGL normal map (R, G) is packed together with the roughness map (B) into one 
 
 Procedural (made in code, no credit needed): louvred shutters, doors, AC units, rolling shutters,
 awning fabric, solar collectors, Art Nouveau / Art Deco / Haussmann relief panels, zellige, marble,
-ceramic tiles, water tanks, the far-LOD facade impostor, wrought-iron railings, balustrades,
+ceramic tiles, water tanks, the far-LOD facade impostor, the weathering noise, wrought-iron railings, balustrades,
 bougainvillea and potted plants, window interiors (interior-mapping shader), shop signs and the
 flag of Tunisia. Shop names are invented; no real brands.
 

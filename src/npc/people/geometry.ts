@@ -210,6 +210,8 @@ export interface ShellOpts {
   phi1?: number;
   /** Remaps the row parameter (denser rows where detail is). */
   rowMap?: (t: number) => number;
+  /** Remaps the column parameter 0..1 across [phi0, phi1] (denser columns where detail is). */
+  colMap?: (u: number) => number;
 }
 
 /** Grid over the head surface between θ0(φ) and θ1(φ). Hair, hijab, beard and the head itself.
@@ -233,7 +235,7 @@ export function shell(bd: Builder, f: HeadFn, o: ShellOpts): { first: number[]; 
   for (let i = r0; i <= o.rows; i++) {
     const t = rowT(i);
     for (let j = 0; j < cols; j++) {
-      let phi = p0 + ((p1 - p0) * j) / o.segs;
+      let phi = p0 + (p1 - p0) * (o.colMap ? o.colMap(j / o.segs) : j / o.segs);
       if (phi > Math.PI + 1e-9) phi -= Math.PI * 2; // callbacks always see φ in (−π, π]
       const th = o.th0(phi) + (o.th1(phi) - o.th0(phi)) * t;
       f(th, phi, o.off(t, phi, th), _p);
@@ -257,10 +259,14 @@ export function shell(bd: Builder, f: HeadFn, o: ShellOpts): { first: number[]; 
 const _t = new Vector3(), _n = new Vector3(), _s = new Vector3(), _q = new Vector3();
 
 /** Sweeps a flat rectangle (half width × half thickness) along a path. `up(i)` = outward normal of
- *  the surface the strip lies on (the rectangle's thin axis). */
+ *  the surface the strip lies on (the rectangle's thin axis). Every face has its own vertices, so
+ *  the broad faces shade flat-on (shared corner normals would tilt them 45° and read as dark planks). */
 export function sweep(bd: Builder, pts: readonly Vector3[], up: (i: number) => Vector3, hw: number | ((i: number) => number), ht: number, col: RGB | ((i: number) => RGB), bind: Bind | ((i: number) => Bind), rough: number, closed = false, uv?: (i: number, side: number) => readonly [number, number]): void {
   const n = pts.length;
+  const CORNERS = [[1, 1], [-1, 1], [-1, -1], [1, -1]] as const; // counter-clockwise seen along the path
   const first = bd.vertexCount;
+  const corner: Vector3[] = [new Vector3(), new Vector3(), new Vector3(), new Vector3()];
+  const ends: Vector3[][] = [];
   for (let i = 0; i < n; i++) {
     const a = pts[closed ? (i - 1 + n) % n : Math.max(0, i - 1)], b = pts[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
     _t.subVectors(b, a).normalize();
@@ -270,26 +276,31 @@ export function sweep(bd: Builder, pts: readonly Vector3[], up: (i: number) => V
     const w = typeof hw === 'function' ? hw(i) : hw;
     const c = typeof col === 'function' ? col(i) : col;
     const bnd = typeof bind === 'function' ? bind(i) : bind;
-    // rectangle corners, counter-clockwise seen along the path
-    for (const [sx, sy] of [[1, 1], [-1, 1], [-1, -1], [1, -1]] as const) {
-      _q.copy(pts[i]).addScaledVector(_s, sx * w).addScaledVector(_n, sy * ht);
-      bd.v(_q, c, bnd, rough, uv ? uv(i, sx) : NEUTRAL_UV);
+    CORNERS.forEach(([sx, sy], k) => corner[k].copy(pts[i]).addScaledVector(_s, sx * w).addScaledVector(_n, sy * ht));
+    // face k runs from corner k to corner k + 1: two vertices of its own per section
+    for (let k = 0; k < 4; k++) {
+      bd.v(corner[k], c, bnd, rough, uv ? uv(i, CORNERS[k][0]) : NEUTRAL_UV);
+      bd.v(corner[(k + 1) % 4], c, bnd, rough, uv ? uv(i, CORNERS[(k + 1) % 4][0]) : NEUTRAL_UV);
     }
+    if (!closed && (i === 0 || i === n - 1)) ends.push(corner.map((q) => q.clone()));
   }
   const segs = closed ? n : n - 1;
   for (let i = 0; i < segs; i++) {
     const i2 = (i + 1) % n;
     for (let k = 0; k < 4; k++) {
-      const a = first + i * 4 + k, b = first + i * 4 + ((k + 1) % 4);
-      const c = first + i2 * 4 + k, d = first + i2 * 4 + ((k + 1) % 4);
+      const a = first + i * 8 + k * 2, b = a + 1;
+      const c = first + i2 * 8 + k * 2, d = c + 1;
       bd.tri(a, c, b);
       bd.tri(b, c, d);
     }
   }
   if (!closed) {
-    const e = first + (n - 1) * 4;
-    bd.tri(first, first + 1, first + 2); bd.tri(first, first + 2, first + 3);
-    bd.tri(e, e + 2, e + 1); bd.tri(e, e + 3, e + 2);
+    // flat end caps
+    const c0 = typeof col === 'function' ? col(0) : col, c1 = typeof col === 'function' ? col(n - 1) : col;
+    const b0 = typeof bind === 'function' ? bind(0) : bind, b1 = typeof bind === 'function' ? bind(n - 1) : bind;
+    const s0 = ends[0].map((q) => bd.v(q, c0, b0, rough)), s1 = ends[1].map((q) => bd.v(q, c1, b1, rough));
+    bd.tri(s0[0], s0[1], s0[2]); bd.tri(s0[0], s0[2], s0[3]);
+    bd.tri(s1[0], s1[2], s1[1]); bd.tri(s1[0], s1[3], s1[2]);
   }
 }
 

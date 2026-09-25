@@ -2,7 +2,7 @@
 // angles per bone + hip offset + a few control channels) into a Float32Array; loops cross-fade,
 // one-shots are layered on top with an envelope, then the result is grounded with a tiny leg FK
 // (so feet stay on the floor whatever the pose) and written to the bones.
-import { Quaternion, Vector3, type Bone } from 'three';
+import { Matrix4, Quaternion, Vector3, type Bone } from 'three';
 import type { PersonAnim } from '../../core/types';
 import { BONE, type Dims } from './body';
 import type { Traits } from './traits';
@@ -11,6 +11,8 @@ import type { Traits } from './traits';
 export const THROW_RELEASE_SEC = 0.42;
 /** Seconds after setAnim('pickUp') at which the hand reaches the floor. */
 export const PICKUP_GRAB_SEC = 0.75;
+/** Height (m) of the grip point (the held item's centre) above the feet at PICKUP_GRAB_SEC. */
+export const PICKUP_GRIP_Y = 0.07;
 /** Café chair seat height the 'sit' pose is built for (street café chairs: 0.46–0.48 m). */
 export const SEAT_HEIGHT = 0.475;
 
@@ -48,6 +50,13 @@ for (const b of [BONE.hips, BONE.thighL, BONE.shinL, BONE.footL, BONE.thighR, BO
 LOWER.fill(1, HX, PLANT + 1);
 
 const set = (p: Float32Array, b: number, x: number, y: number, z: number) => { p[b * 3] = x; p[b * 3 + 1] = y; p[b * 3 + 2] = z; };
+// throw keys over time (s): wind-up (forearm cocked back by the ear) → snap → follow-through
+const TH_ARM_X = [[0, 0.05], [0.26, -1.0], [0.38, -1.35], [0.48, -0.95], [0.62, -0.5], [0.8, -0.35]] as const;
+const TH_ARM_Y = [[0, 0], [0.26, 0.5], [0.4, 0.1], [0.6, 0]] as const;
+const TH_ARM_Z = [[0, -0.08], [0.26, -0.55], [0.4, -0.25], [0.6, -0.15]] as const;
+const TH_FORE_X = [[0, -0.3], [0.26, -2.1], [0.34, -1.5], [0.4, -0.5], [0.5, -0.25], [0.7, -0.3]] as const;
+const TH_HAND_X = [[0, 0], [0.26, 0.55], [0.34, 0.45], [0.42, -0.8], [0.6, -0.35]] as const;
+const TH_TWIST = [[0, 0], [0.28, -0.32], [0.44, 0.22], [0.75, 0.05]] as const;
 // hoisted bone tables (no per-frame allocations)
 const LEGS = [[BONE.thighL, BONE.shinL, BONE.footL], [BONE.thighR, BONE.shinR, BONE.footR]] as const;
 const ARMS = [[1, BONE.armL, BONE.foreL, BONE.handL], [-1, BONE.armR, BONE.foreR, BONE.handR]] as const;
@@ -59,6 +68,10 @@ export class Animator {
   private readonly a = new Float32Array(N);
   private readonly b = new Float32Array(N);
   private readonly shotPose = new Float32Array(N);
+  /** Pose snapshot for transitions that can't cross-fade two live animations (see set()). */
+  private readonly snap = new Float32Array(N);
+  private snapW = 0;
+  private snapLen = 0.3;
   private loop: Loop = 'idle';
   private prev: Loop | null = null;
   private fade = 1;
@@ -66,7 +79,7 @@ export class Animator {
   private shot: Shot | null = null;
   private shotT = 0;
   private t: number;
-  private phase = 0; // gait phase 0..1
+  private phase: number; // gait phase 0..1
   private speed = 0;
   // look-around state
   private lookYaw = 0;
@@ -75,8 +88,12 @@ export class Animator {
   private lookTP = 0;
   private lookNext = 0;
   private rnd: number;
-  /** Skirts, dresses and robes: poses keep the hips less flexed. */
+  /** Skirts, dresses and robes: the skirt panel bones follow the legs; pick-ups kneel. */
   private readonly skirted: boolean;
+  /** Hem below the knee: shorter steps, less knee lift. */
+  private readonly longSkirt: boolean;
+  /** Extra forward bend of the pick-up pose, solved so the grip reaches PICKUP_GRIP_Y. */
+  private pickLean = 0;
   private readonly q = new Quaternion();
   private readonly q2 = new Quaternion();
   private readonly axisX = new Vector3(1, 0, 0);
@@ -84,21 +101,51 @@ export class Animator {
 
   constructor(private readonly bones: Bone[], private readonly rest: Vector3[], private readonly d: Dims, private readonly tr: Traits) {
     this.t = tr.style.phase;
+    this.phase = tr.style.phase % 1; // walkers created together don't march in lockstep
     const bk = tr.bottom.kind;
     this.skirted = bk === 'skirt' || bk === 'dress' || bk === 'longskirt' || bk === 'robe';
+    this.longSkirt = this.skirted && tr.bottom.hem < 0.2;
     this.rnd = (tr.seed * 2654435761) >>> 0;
     this.lookNext = this.t + 1 + this.rand() * 3;
+    this.pickLean = this.solvePickLean();
   }
 
   get current(): PersonAnim { return this.shot ?? this.loop; }
 
   set(anim: PersonAnim): void {
-    if (isShot(anim)) { this.shot = anim; this.shotT = 0; return; }
+    if (isShot(anim)) {
+      // a one-shot interrupting another would pop (the new one starts at weight 0): fade from the
+      // current pose instead
+      if (this.shot) this.snapshot(0.25);
+      this.shot = anim;
+      this.shotT = 0;
+      return;
+    }
     if (anim === this.loop) return;
-    this.prev = this.loop;
-    this.fadeLen = anim === 'sit' || this.loop === 'sit' ? 0.7 : 0.3;
-    this.fade = 0;
+    const len = anim === 'sit' || this.loop === 'sit' ? 0.7 : 0.3;
+    if (this.prev && this.fade < 1) {
+      // changed again mid cross-fade: fade from the pose as it is now
+      this.snapshot(len);
+      this.prev = null;
+      this.fade = 1;
+    } else {
+      this.prev = this.loop;
+      this.fadeLen = len;
+      this.fade = 0;
+    }
     this.loop = anim;
+  }
+
+  private snapshot(len: number): void {
+    this.snap.set(this.out);
+    this.snapW = 1;
+    this.snapLen = len;
+  }
+
+  /** Stride length (m per gait cycle) at speed v. */
+  private strideAt(v: number): number {
+    const L = this.d.hipY;
+    return clamp(L * (0.95 + 0.55 * v) * this.tr.style.stride * (this.longSkirt ? 0.86 : 1), 0.3 * L, 2.1 * L);
   }
 
   private rand(): number {
@@ -109,9 +156,7 @@ export class Animator {
   update(dt: number, speed: number): void {
     this.t += dt;
     this.speed = speed;
-    const L = this.d.hipY;
-    const stride = clamp(L * (0.95 + 0.55 * speed) * this.tr.style.stride, 0.3 * L, 2.1 * L);
-    this.phase = (this.phase + (dt * speed) / stride) % 1;
+    this.phase = (this.phase + (dt * speed) / this.strideAt(speed)) % 1;
     this.updateLook(dt);
 
     // loops (cross-fade)
@@ -137,6 +182,11 @@ export class Animator {
         for (let i = 0; i < N; i++) p[i] = lerp(p[i], s[i], LOWER[i] ? env * (1 - seated) : env);
         p[TRASH] = s[TRASH];
       }
+    }
+    if (this.snapW > 0) {
+      const w = smooth(0, 1, this.snapW);
+      for (let i = 0; i < N; i++) this.out[i] = lerp(this.out[i], this.snap[i], w);
+      this.snapW -= dt / this.snapLen;
     }
     this.apply();
   }
@@ -231,12 +281,11 @@ export class Animator {
     const st = this.tr.style, H = this.d.H, L = this.d.hipY;
     const v = this.speed;
     const kk = smooth(0.05, 0.45, v); // fades to a stand at very low speed
-    const stride = clamp(L * (0.95 + 0.55 * v) * st.stride, 0.3 * L, 2.1 * L);
-    const A = Math.asin(Math.min(0.55, stride / (4 * L))) * kk;
+    const A = Math.asin(Math.min(0.55, this.strideAt(v) / (4 * L))) * kk;
     const ph = this.phase;
     const th = ph * TAU;
     const c = Math.cos(th), s = Math.sin(th);
-    const Kst = 0.35 * A, Ksw = 2.3 * A;
+    const Kst = 0.35 * A, Ksw = (this.longSkirt ? 1.6 : 2.3) * A;
     const hx = st.stoop * 0.25 + 0.03 * kk;
     set(p, BONE.hips, hx, -0.11 * A * c, 0.07 * A * s * st.sway);
     p[HX] = 0.012 * H * s * st.sway * kk;
@@ -360,16 +409,18 @@ export class Animator {
     s.set(base);
     const H = this.d.H;
     if (k === 'throw') {
-      // upper-body flick to the front-right; legs keep doing the loop
-      const wind = smooth(0, 0.3, tt), flick = smooth(0.3, 0.46, tt);
-      set(s, BONE.armR, lerp(lerp(0.1, -0.35, wind), -1.25, flick), lerp(lerp(0, 0.9, wind), 0.2, flick), lerp(lerp(-0.1, -0.1, wind), -0.75, flick));
-      set(s, BONE.foreR, lerp(lerp(-0.3, -1.9, wind), -0.2, flick), 0.3, 0);
-      set(s, BONE.handR, lerp(lerp(0, 0.6, wind), -0.7, flick), 0, 0);
-      set(s, BONE.spine, base[BONE.spine * 3] + 0.06 * flick, lerp(0.15 * wind, -0.15, flick), 0);
-      set(s, BONE.chest, base[BONE.chest * 3], lerp(0.3 * wind, -0.3, flick), 0);
-      set(s, BONE.head, base[BONE.head * 3] + 0.05, lerp(0.15 * wind, -0.4, flick), 0);
+      // overhand flick to the front-right: wind up with the forearm cocked back past the shoulder,
+      // snap forward and down (release at THROW_RELEASE_SEC), follow through to the front of the hip;
+      // the chest twists into it. Legs keep doing the loop.
+      set(s, BONE.armR, tbl(TH_ARM_X, tt), tbl(TH_ARM_Y, tt), tbl(TH_ARM_Z, tt));
+      set(s, BONE.foreR, tbl(TH_FORE_X, tt), 0.25, 0);
+      set(s, BONE.handR, tbl(TH_HAND_X, tt), 0, 0);
+      const tw = tbl(TH_TWIST, tt);
+      set(s, BONE.spine, base[BONE.spine * 3] + 0.05 * smooth(0.3, 0.5, tt), tw * 0.35, 0);
+      set(s, BONE.chest, base[BONE.chest * 3] + 0.04 * smooth(0.3, 0.5, tt), tw * 0.65, 0);
+      set(s, BONE.head, base[BONE.head * 3] + 0.06, -0.2 - tw * 0.4, 0);
       s[TRASH] = tt < THROW_RELEASE_SEC ? 1 : 0;
-      return smooth(0, 0.15, tt) * (1 - smooth(0.62, 1.1, tt));
+      return smooth(0, 0.12, tt) * (1 - smooth(0.7, 1.1, tt));
     }
     if (k === 'startled') {
       const hop = Math.sin(Math.PI * clamp(tt / 0.32, 0, 1));
@@ -388,51 +439,113 @@ export class Animator {
       s[BAG_SWING] = 0.4 * hop;
       return smooth(0, 0.06, tt) * (1 - smooth(0.45, 1.0, tt));
     }
-    // pickUp: squat + bend, right hand to the floor in front, stand up holding the item
-    const reach = smooth(0.35, PICKUP_GRAB_SEC, tt) * (1 - smooth(0.95, 1.4, tt));
-    s[HX] = 0;
-    s[PLANT] = 1;
-    if (this.skirted) {
-      // knees together, less hip flexion (a tight skirt cannot follow a deep squat): round the back instead
-      set(s, BONE.hips, 0.2, 0, 0);
-      set(s, BONE.thighL, -0.62, -0.05, 0.03); set(s, BONE.shinL, 1.1, 0, 0);
-      set(s, BONE.thighR, -0.5, 0.05, -0.03); set(s, BONE.shinR, 0.95, 0, 0);
-      this.flatFeet(s);
-      set(s, BONE.spine, 0.62 + 0.12 * reach, 0.1, 0); set(s, BONE.chest, 0.45 + 0.1 * reach, 0.05, 0);
-    } else {
-      set(s, BONE.hips, 0.3, 0, 0);
-      set(s, BONE.thighL, -1.15, -0.15, 0.14); set(s, BONE.shinL, 1.75, 0, -0.05);
-      set(s, BONE.thighR, -1.0, 0.15, -0.14); set(s, BONE.shinR, 1.55, 0, 0.05);
-      this.flatFeet(s);
-      set(s, BONE.spine, 0.35 + 0.1 * reach, 0.1, 0); set(s, BONE.chest, 0.25 + 0.1 * reach, 0.05, 0);
-    }
-    set(s, BONE.neck, 0.05, 0, 0); set(s, BONE.head, 0.15, -0.1, 0);
-    set(s, BONE.armR, lerp(-0.4, -0.75, reach), 0.2, -0.15); set(s, BONE.foreR, lerp(-0.6, -0.1, reach), 0.3, 0); set(s, BONE.handR, 0.3, 0, 0);
-    set(s, BONE.armL, -0.55, 0, 0.2); set(s, BONE.foreL, -0.8, -0.4, 0); set(s, BONE.handL, 0.2, 0, 0);
+    // pickUp: squat (or kneel in a skirt), reach the right hand to the floor, stand up holding it
+    const reach = smooth(0.3, PICKUP_GRAB_SEC, tt) * (1 - smooth(0.95, 1.45, tt));
+    this.pickPose(s, reach);
     s[TRASH] = tt > PICKUP_GRAB_SEC && tt < SHOT_LEN.pickUp - 0.15 ? 1 : 0;
-    return smooth(0, 0.65, tt) * (1 - smooth(1.0, 1.8, tt));
+    return smooth(0, 0.55, tt) * (1 - smooth(1.0, 1.8, tt));
+  }
+
+  /** Pick-up pose at full weight; `k` 0..1 extends the reaching arm + the solved extra bend. */
+  private pickPose(s: Float32Array, k: number): void {
+    s[HX] = 0;
+    s[HZ] = 0;
+    s[PLANT] = 1;
+    s[GROUND] = 1;
+    let bend: number; // hips + spine + chest forward bend
+    if (this.skirted) {
+      // kneel on the right knee (a skirt can't follow a deep squat), left foot planted forward
+      set(s, BONE.hips, 0.15, 0, 0);
+      set(s, BONE.thighL, -1.62, -0.08, 0.06); set(s, BONE.shinL, 2.0, 0, 0);
+      set(s, BONE.thighR, -0.12, 0.05, -0.05); set(s, BONE.shinR, 1.95, 0, 0);
+      this.flatFeet(s);
+      s[BONE.footR * 3] = 1.25 - (0.15 - 0.12 + 1.95); // toes tucked under
+      set(s, BONE.spine, 0.3 + this.pickLean * 0.55 * k, 0.05, 0); set(s, BONE.chest, 0.2 + this.pickLean * 0.45 * k, 0.05, 0);
+      bend = 0.15 + 0.3 + 0.2;
+    } else {
+      // squat, knees apart, heels down
+      set(s, BONE.hips, 0.3, 0, 0);
+      // (both legs give the same hip height, so neither heel lifts)
+      set(s, BONE.thighL, -1.65, -0.22, 0.2); set(s, BONE.shinL, 1.8, 0, -0.08);
+      set(s, BONE.thighR, -1.5, 0.22, -0.2); set(s, BONE.shinR, 1.86, 0, 0.08);
+      this.flatFeet(s);
+      set(s, BONE.spine, 0.25 + this.pickLean * 0.55 * k, 0.08, 0); set(s, BONE.chest, 0.2 + this.pickLean * 0.45 * k, 0.05, 0);
+      bend = 0.3 + 0.25 + 0.2;
+    }
+    bend += this.pickLean * k;
+    // head looks at the item: counter part of the bend
+    set(s, BONE.neck, -0.25 * bend + 0.1, 0, 0); set(s, BONE.head, -0.2 * bend + 0.25, -0.1, 0);
+    // right arm hangs to the floor (a little forward of vertical) with a nearly straight elbow
+    set(s, BONE.armR, lerp(-0.35, -bend - 0.22, k), lerp(0.1, 0.15, k), lerp(-0.12, -0.1, k));
+    set(s, BONE.foreR, lerp(-0.7, -0.12, k), 0.2, 0);
+    set(s, BONE.handR, lerp(0.1, 0.35, k), 0, 0);
+    // left forearm rests on the left knee
+    set(s, BONE.armL, -bend + 0.35, 0, 0.18); set(s, BONE.foreL, -1.1, -0.4, 0); set(s, BONE.handL, 0.2, 0, 0);
+  }
+
+  /** Finds pickLean so the grip point (trash bone) sits PICKUP_GRIP_Y above the floor at the grab.
+   *  Monotone in the lean (the arm compensates the bend), so a bisection is exact and cheap; runs
+   *  once per person (~20 µs). */
+  private solvePickLean(): number {
+    const s = this.shotPose, B = this.bones;
+    const m = new Matrix4();
+    let lo = 0, hi = 1.4;
+    for (let it = 0; it < 16; it++) {
+      this.pickLean = (lo + hi) / 2;
+      s.fill(0);
+      this.pickPose(s, 1);
+      const [hy, hz] = this.ground(s);
+      m.identity();
+      for (const i of CHAIN_R) {
+        const b = B[i];
+        b.rotation.set(s[i * 3], s[i * 3 + 1], s[i * 3 + 2]);
+        if (i === BONE.hips) b.position.set(this.rest[i].x, this.rest[i].y + hy, this.rest[i].z + hz);
+        b.updateMatrix();
+        m.multiply(b.matrix);
+      }
+      m.multiply(B[BONE.trash].matrix);
+      if (m.elements[13] > PICKUP_GRIP_Y) lo = this.pickLean; else hi = this.pickLean;
+    }
+    return (lo + hi) / 2;
   }
 
   // ---------------------------------------------------------------------------------------------
-  /** Grounding + write to bones + prop bones. */
-  private apply(): void {
-    const p = this.out, B = this.bones, d = this.d;
-    // leg FK in the sagittal plane: hip height needed so the lowest foot point touches the floor
+  /** Hip offset (y, z) that keeps the lowest foot / knee on the floor and the feet planted. Tiny leg
+   *  FK in the sagittal plane. */
+  private ground(p: Float32Array): [number, number] {
+    const d = this.d;
     const hp = p[BONE.hips * 3];
     let need = 0, zSum = 0;
     for (const [tb, sb, fb] of LEGS) {
       const A = hp + p[tb * 3], K = A + p[sb * 3], P = K + p[fb * 3];
-      const drop = d.thigh * Math.cos(A) + d.shin * Math.cos(K);
+      const knee = d.thigh * Math.cos(A);
+      const drop = knee + d.shin * Math.cos(K);
       const cp = Math.cos(P), sp = Math.sin(P);
       const heel = -d.ankleY * cp + 0.26 * d.footLen * sp;
       const toe = -(d.ankleY - 0.003 * d.H) * cp - 0.72 * d.footLen * sp;
-      need = Math.max(need, drop - Math.min(heel, toe));
+      need = Math.max(need, drop - Math.min(heel, toe), knee + 0.03 * d.H); // (the knee only matters kneeling)
       zSum += -d.thigh * Math.sin(A) - d.shin * Math.sin(K);
     }
-    const hipsY = p[HY] + p[GROUND] * (need - d.hipY);
-    const hipsZ = p[HZ] - p[PLANT] * zSum * 0.5;
+    return [p[HY] + p[GROUND] * (need - d.hipY), p[HZ] - p[PLANT] * zSum * 0.5];
+  }
+
+  /** Grounding + write to bones + prop bones. */
+  private apply(): void {
+    const p = this.out, B = this.bones;
+    const [hipsY, hipsZ] = this.ground(p);
     for (let i = 0; i < NB; i++) B[i].rotation.set(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
     B[BONE.hips].position.set(this.rest[BONE.hips].x + p[HX], this.rest[BONE.hips].y + hipsY, this.rest[BONE.hips].z + hipsZ);
+    if (this.skirted) {
+      // skirt panels: the front follows the leg that is further forward, the back the one further
+      // back (upper panel from the hip, lower panel from the knee); the sides blend both
+      const tL = p[BONE.thighL * 3], tR = p[BONE.thighR * 3];
+      const sL = tL + p[BONE.shinL * 3], sR = tR + p[BONE.shinR * 3];
+      const f = Math.min(tL, tR), b = Math.max(tL, tR);
+      B[BONE.skirtF].rotation.set(f, 0, 0);
+      B[BONE.skirtB].rotation.set(b, 0, 0);
+      B[BONE.skirtFL].rotation.set(Math.min(sL, sR) - f, 0, 0);
+      B[BONE.skirtBL].rotation.set((Math.max(sL, sR) - b) * 0.75, 0, 0); // fabric doesn't follow a kicked-up heel fully
+    }
 
     const hide = 1e-4;
     B[BONE.trash].scale.setScalar(p[TRASH] > 0.5 ? 1 : hide);

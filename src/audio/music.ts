@@ -1,9 +1,12 @@
 // Procedural Tunisian-flavoured loop in D Hijaz at 118 BPM: darbouka (doum/tek/ka), bendir,
 // handclaps, chkacheks, synth bass, a qanun hook and a mizwad-style reed lead.
 //
-// Form: a 32-bar cycle A · B · A' · C (8 bars each, ~65 s): the hook, its answer, the hook with
-// qanun tremolo and a saidi groove, then a breakdown that builds back up. Every 8th bar ends in a
-// darbouka fill. Layers fade in with intensity (0..1): claps ≥ 0.25, chkacheks ≥ 0.5, mizwad ≥ 0.8.
+// Form: a 32-bar cycle A · B · A' · C (8 bars each, ~65 s): the hook and its answer phrase (A2),
+// the B melody, the hook again with qanun tremolo and a saidi groove, then a breakdown that builds
+// back up. Odd cycles swap A' to answer-first and give the breakdown the B melody, so the hook
+// itself plays 2–4 times a cycle and a 5-minute run never hears the same 65 s twice in a row.
+// Every 8th bar ends in one of two darbouka fills, picked at random.
+// Layers fade in with intensity (0..1): claps ≥ 0.25, chkacheks ≥ 0.5, mizwad ≥ 0.8.
 // The menu arrangement drops to a soft malfuf groove, long bass notes and a drone pad.
 //
 // Steps are 16th notes, scheduled ahead of time by `schedule(until)` (live: a lookahead timer in
@@ -30,6 +33,13 @@ const HOOK_A: readonly (readonly Note[])[] = [
   [[0, A5, 2], [2, Bb5, 1], [3, A5, 1], [4, G5, 2], [6, Fs5, 2], [8, G5, 2], [10, A5, 2], [12, C6, 2], [14, Bb5, 2]],
   [[0, A5, 4], [4, G5, 2], [6, Fs5, 2], [8, Eb5, 2], [10, Fs5, 2], [12, D5, 4]],
 ];
+/** Answer phrase: higher, ornamented turns, and a half cadence on A that leads back into the hook. */
+const HOOK_A2: readonly (readonly Note[])[] = [
+  [[0, D6, 2], [2, C6, 1], [3, Bb5, 1], [4, A5, 2], [6, Bb5, 1], [7, A5, 1], [8, G5, 2], [10, A5, 2], [12, Bb5, 4]],
+  [[0, A5, 2], [2, G5, 1], [3, Fs5, 1], [4, G5, 4], [8, Fs5, 2], [10, Eb5, 2], [12, Fs5, 2], [14, G5, 2]],
+  [[0, A5, 1], [1, Bb5, 1], [2, A5, 2], [4, C6, 2], [6, Bb5, 2], [8, A5, 1], [9, Bb5, 1], [10, A5, 1], [11, G5, 1], [12, Fs5, 2], [14, G5, 2]],
+  [[0, Fs5, 2], [2, Eb5, 2], [4, D5, 6], [10, Eb5, 1], [11, Fs5, 1], [12, A5, 4]],
+];
 const HOOK_B: readonly (readonly Note[])[] = [
   [[0, D6, 3], [3, C6, 1], [4, Bb5, 2], [6, A5, 2], [8, Bb5, 2], [10, C6, 2], [12, D6, 4]],
   [[0, Eb6, 2], [2, D6, 2], [4, C6, 2], [6, Bb5, 2], [8, A5, 6], [14, G5, 1], [15, A5, 1]],
@@ -47,7 +57,8 @@ const DARB = {
   saidi: 'D.T...D.D...T...',
   saidiO: 'D.Tk.kD.D.k.T.kr',
   malfuf: 'D..T..T.D..T..T.',
-  fill: 'TkTkrrrr', // replaces the second half of a section's last bar
+  fill: 'TkTkrrrr', // replaces the second half of a section's last bar (or fill2, at random)
+  fill2: 'DkTkDkrr',
   build: 'TkTkTkTkrrrrrrrr',
 } as const;
 const BENDIR = { game: 'B.....t.B.....t.', calm: 'B.......B.......' } as const;
@@ -73,6 +84,9 @@ export class Music {
   private intensity = 0;
   private menu = false;
   private menuNext = false;
+  private fill: string = DARB.fill;
+  /** Layer gains for the current intensity / arrangement (cached: read several times per step). */
+  private tg: Record<Layer, number> = { perc: 0, claps: 0, shaker: 0, bass: 0, hook: 0, lead: 0, pad: 0 };
 
   constructor(private readonly ctx: BaseAudioContext, dest: AudioNode, verb: AudioNode) {
     this.out = gain(ctx, 0, dest);
@@ -141,17 +155,20 @@ export class Music {
   }
 
   // --------------------------------------------------------------------------------------------
-  private targets(): Record<Layer, number> {
-    const i = this.intensity;
-    if (this.menu) return { perc: 0.6, claps: 0, shaker: 0, bass: 0.7, hook: 0.75, lead: 0, pad: 0.9 };
-    return {
-      perc: 0.9 + 0.1 * i, claps: smooth(0.2, 0.4, i), shaker: smooth(0.45, 0.65, i), bass: 1, hook: 1,
-      lead: smooth(0.75, 0.9, i), pad: 0.7,
-    };
+  private retarget(): void {
+    const i = this.intensity, tg = this.tg, m = this.menu;
+    tg.perc = m ? 0.6 : 0.9 + 0.1 * i;
+    tg.claps = m ? 0 : smooth(0.2, 0.4, i);
+    tg.shaker = m ? 0 : smooth(0.45, 0.65, i);
+    tg.bass = m ? 0.7 : 1;
+    tg.hook = m ? 0.75 : 1;
+    tg.lead = m ? 0 : smooth(0.75, 0.9, i);
+    tg.pad = m ? 0.9 : 0.7;
   }
 
   private applyLayers(t: number, tau: number): void {
-    const tg = this.targets();
+    this.retarget();
+    const tg = this.tg;
     for (const l of LAYERS) {
       const p = this.layer[l].gain;
       p.cancelScheduledValues(t);
@@ -160,7 +177,7 @@ export class Music {
   }
 
   private on(l: Layer): boolean {
-    return this.targets()[l] > 0.01 || this.layer[l].gain.value > 0.01;
+    return this.tg[l] > 0.01 || this.layer[l].gain.value > 0.01;
   }
 
   private playStep(s: number, t0: number): void {
@@ -168,7 +185,8 @@ export class Music {
     const st = s % 16, bar = Math.floor(s / 16);
     if (st === 0 && this.menuNext !== this.menu) { this.menu = this.menuNext; this.applyLayers(t0, 1.5); }
     const menu = this.menu, I = this.intensity;
-    const cyc = bar % 32, sec = cyc >> 3, bis = cyc & 7;
+    const cyc = bar % 32, sec = cyc >> 3, bis = cyc & 7, odd = ((bar >> 5) & 1) === 1;
+    if (st === 0) this.fill = Math.random() < 0.5 ? DARB.fill : DARB.fill2;
     const t = t0 + rnd(-0.003, 0.003) + (st % 2 ? STEP * 0.06 : 0); // humanise + a touch of swing
     const vel = (base: number) => base * rnd(0.85, 1);
 
@@ -181,7 +199,7 @@ export class Music {
       else if (sec === 2) groove = DARB.saidiO;
       else groove = I > 0.35 ? DARB.maqsumO : DARB.maqsum;
       if (!menu && sec === 3 && bis === 7) groove = DARB.build;
-      else if (bis === 7 && (!menu || (bar & 15) === 15)) groove = groove.slice(0, 8) + DARB.fill;
+      else if (bis === 7 && (!menu || (bar & 15) === 15)) groove = groove.slice(0, 8) + this.fill;
       const ch = groove[st];
       const soft = menu ? 0.55 : 1;
       const cresc = groove === DARB.build ? 0.45 + 0.55 * (st / 15) : 1;
@@ -204,7 +222,7 @@ export class Music {
     }
 
     // ---- bass
-    const phrase = sec === 1 ? 'B' : 'A';
+    const phrase = sec === 1 || (sec === 3 && odd) ? 'B' : 'A';
     const roots = (phrase === 'B' ? ROOTS_B : ROOTS_A)[bis & 3];
     if (this.on('bass')) {
       if (menu || sec === 3) {
@@ -219,7 +237,8 @@ export class Music {
     }
 
     // ---- qanun hook (+ mizwad doubling at high intensity)
-    const bars = phrase === 'B' ? HOOK_B : HOOK_A;
+    // A: hook then answer · A': the same (answer first in odd cycles) · B and odd breakdowns: B melody
+    const bars = phrase === 'B' ? HOOK_B : (bis < 4) !== (sec === 2 && odd) ? HOOK_A : HOOK_A2;
     const hookBar = bars[bis & 3];
     for (const [ns, m, len] of hookBar) {
       if (ns !== st) continue;

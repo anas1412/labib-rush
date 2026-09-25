@@ -16,7 +16,7 @@ import type { GeoBuf, P2, V3 } from './geo';
 import { WIN } from './materials';
 import { bayGrid, type BuildingSpec, type Seg, type Shop } from './plan';
 import { chance, pick, range, rng, type Rng } from './rng';
-import type { SignAtlas } from './signs';
+import type { ShopKind, SignAtlas } from './signs';
 import { CUT_STRIP_METERS, IMPOSTOR_V, L, cutV, miscUV, type CutStrip, type MiscRegion } from './textures';
 
 const PAINT_RECT = miscUV('paint');
@@ -58,6 +58,11 @@ const P_SLAB_MODERN: P2[] = [[0, 0], [0.32, 0], [0.32, 0.28], [0, 0.28]];
 const P_SLAB_EDGE: P2[] = [[0, 0], [0.03, 0.02], [0.035, 0.08], [0.06, 0.12], [0.06, 0.22], [0, 0.23]];
 
 const IRON: V3 = [0.02, 0.022, 0.025];
+/** Shop interior type added to WIN.SHOP (materials.ts shopWall): 0 stocked shelves (default),
+ *  0.2 boutique (sparse lit niches), 0.4 clothes on rails. */
+const SHOP_INTERIOR: Partial<Record<ShopKind, number>> = {
+  bijouterie: 0.2, optique: 0.2, parfumerie: 0.2, banque: 0.2, assurance: 0.2, voyage: 0.2, photo: 0.2, hotel: 0.2, boutique: 0.4,
+};
 /** Lowest point of any awning above the pavement (m): Labib's jump apex is ≈ 2.95 m. */
 const AWNING_CLEAR = 3.12;
 const ZINC: V3 = [0.36, 0.37, 0.38];
@@ -257,10 +262,13 @@ export function buildBuilding(b: BuildingSpec, B: Bufs, signs: SignAtlas, q: Qua
   roof(c);
   if (c.proxy) {
     // building mass, inset behind the facade line so recessed shutters, glass and shopfronts
-    // stay lit (the proxy's front would otherwise shadow everything behind the facade plane)
+    // stay lit (the proxy's front would otherwise shadow everything behind the facade plane).
+    // Walls only: the shadow pass draws back faces, and a sun ray through a building always leaves
+    // through a wall before it could reach anything visible (a bottom face would just rasterise the
+    // whole footprint again, the top is a front face).
     const g = B.shadow;
     g.setFrame(0, 0, 0, 0, 1);
-    g.prismY(inset(b.footprint, 0.35), y0 - 0.2, b.style === 'modern' ? top + 1.0 : c.parTop);
+    g.prismY(inset(b.footprint, 0.35), y0 - 0.2, b.style === 'modern' ? top + 1.0 : c.parTop, false, false);
   }
 }
 
@@ -788,7 +796,8 @@ function shopfront(c: Ctx, o: Opening, shop: Shop): void {
   g.box(o.u0, o.u1, o.y1 - 0.12, o.y1, -d, -d + 0.1, 1 | 32, fu);
   g.box(doorLeft ? du1 : du0 - 0.08, doorLeft ? du1 + 0.08 : du0, y0, o.y1, -d, -d + 0.1, 1 | 4 | 8, fu);
   g.box(o.u0, o.u1, riser - 0.04, riser + 0.02, -d, -d + 0.12, 1 | 16, fu);
-  const kind = cafe ? WIN.CAFE : WIN.SHOP;
+  // restaurants get the café interior; other shops an interior type encoded in the pane kind
+  const kind = cafe || shop.kind === 'restaurant' ? WIN.CAFE : WIN.SHOP + (SHOP_INTERIOR[shop.kind] ?? 0);
   const gl: Opening = { ...o, y0: riser + 0.02, y1: o.y1 - 0.12, u0: doorLeft ? du1 + 0.08 : o.u0, u1: doorLeft ? o.u1 : du0 - 0.08 };
   if (shop.closed) {
     // rolling shutter down
@@ -804,8 +813,8 @@ function shopfront(c: Ctx, o: Opening, shop: Shop): void {
   g.ext = [L.MISC, 0.3, 0, 0];
   g.box(o.u0, o.u1, o.y1 - 0.02, o.y1 + 0.02, -0.12, 0, 32, miscUV('paint'));
 
-  // fascia sign (far chunks skip it, except on 'low' where the far version is all there is)
-  if (shop.sign && (c.lod === 0 || c.q === 'low')) {
+  // fascia sign (both versions: it would visibly pop at the LOD switch)
+  if (shop.sign) {
     const signW = Math.min(W - 0.3, 6.4);
     const signH = signW / 8;
     const nSigns = W > 13 ? 2 : 1;
@@ -1057,8 +1066,8 @@ function dome(c: Ctx, Lz: number): void {
   mat(g, L.STUCCO, b.tint, 0.3);
   if (c.proxy) {
     const oct = (rr: number): P2[] => Array.from({ length: 8 }, (_, i) => [cu + Math.cos((i / 8) * Math.PI * 2) * rr, cw + Math.sin((i / 8) * Math.PI * 2) * rr] as P2);
-    B.shadow.prismY(oct(r), roofY - 0.2, parTop + 1.85);
-    B.shadow.prismY(oct(r * 0.75), parTop + 1.85, parTop + 1.85 + r);
+    B.shadow.prismY(oct(r), roofY - 0.2, parTop + 1.85, false, false);
+    B.shadow.prismY(oct(r * 0.75), parTop + 1.85, parTop + 1.85 + r, false, false);
   }
   // drum
   const sg = c.lod ? 12 : 20;
@@ -1380,7 +1389,7 @@ function modernBuilding(c: Ctx, colliders: ColliderBox[]): void {
     for (const q of all(B)) q.setFrame(0, 0, 0, 0, 1);
     mat(g, L.ROOF, [0.9, 0.9, 0.88], 0.5);
     g.prismY(fpSlab, topY - 0.2, topY + 0.05, true, false, false);
-    if (c.proxy) B.shadow.prismY(inset(fpSlab, 0.35), baseY - 0.5, topY + 1.0);
+    if (c.proxy) B.shadow.prismY(inset(fpSlab, 0.35), baseY - 0.5, topY + 1.0, false, false);
     rooftop(c, fpSlab, topY + 0.05, c.rr(4243), c.lod ? 2 : 0);
     setAll(B, s);
   }

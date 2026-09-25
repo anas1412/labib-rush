@@ -64,7 +64,8 @@ const SHAPES: ShapeFn[] = [
   (x, y) => {
     const d = sdStar5(x, y + 0.07, 0.82, 0.48) - 0.07; // tip up, optically centred
     const body = smooth(AA, -AA, d);
-    return [0.82 + 0.18 * smooth(0.25, -0.35, d), clamp01(body + 0.35 * Math.exp(-Math.max(d, 0) * 16) * (1 - body))];
+    // darker rim so an alpha-blended gold star keeps its silhouette on sunlit sand
+    return [0.58 + 0.42 * smooth(0.02, -0.28, d), clamp01(body + 0.35 * Math.exp(-Math.max(d, 0) * 16) * (1 - body))];
   },
   // ring: thin bright band with a soft outer bloom
   (x, y) => {

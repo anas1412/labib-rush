@@ -6,10 +6,15 @@
 //   ?period=2.4      seconds between bursts per station
 //   ?freeze=0.35     deterministic frame: every station bursts once, the FX clock advances exactly
 //                    this long (60 Hz steps), then stops — for screenshots of mid-burst frames
-//   ?engine=1        render through the game Engine (AgX, LUT grade, AO, bloom) instead of the harness.
-//                    This is the reference look: the harness tone-maps per fragment *before* additive
-//                    blending, so overlapping glows clip to white there; the engine blends in HDR first.
+//   ?engine=0        render through the dev harness instead of the game Engine (AgX, LUT grade, AO,
+//                    bloom, cascaded sun shadows, height fog). The engine is the reference look: the
+//                    harness tone-maps per fragment *before* additive blending, so overlapping glows
+//                    clip to white there, and its DirectionalLight shadow is not sampled by particles.
+//   ?shade=1.6       a high canopy slab shades the ground at x < 1.6 (lit particles in shade vs sun)
+//   ?windStep=1      2 s after ready the shared wind jumps to (−5, 0.3, 0.5) and window.__windStepped is
+//                    set; with ?freeze nothing may move (each particle keeps the wind it was born with)
 //   ?labib=0 ?bin=0  skip the reference models · ?labels=0 hide labels
+//   ?count=3&scale=0.8  burst options for every station (e.g. footstep vs landing dust)
 //   ?stress=1        every kind bursting continuously (pools saturated) to check fps / draw calls
 //   ?disposeTest=1   20 × (createFx → burst everything → render → dispose); logs [fx-dispose] GPU memory
 // Logs [fx-check] with pool stats.
@@ -70,7 +75,7 @@ async function engineView(): Promise<View> {
   return { scene: engine.scene, camera: engine.camera, controls, ctx, onFrame: (f) => fns.push(f), ready: () => { w.__ready = true; } };
 }
 
-const h: View = params.get('engine') === '1' ? await engineView() : await createHarness({ cam: [0, 3.2, 9], target: [0, 0.8, 1.5] });
+const h: View = params.get('engine') !== '0' ? await engineView() : await createHarness({ cam: [0, 3.2, 9], target: [0, 0.8, 1.5] });
 
 // Ground: the street module's promenade paving at promenade height (CURB), plain stone if missing.
 {
@@ -89,6 +94,16 @@ const h: View = params.get('engine') === '1' ? await engineView() : await create
   ground.receiveShadow = true;
   ground.position.y = CURB;
   h.scene.add(ground);
+}
+
+const shadeEdge = params.get('shade');
+if (shadeEdge !== null) {
+  // slab bottom at y = 7: its shadow lands shifted by (2.70, −0.98) × 6.85 m (sun at 19°, WSW)
+  const edge = Number(shadeEdge);
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(40, 0.3, 34), new THREE.MeshStandardMaterial({ color: 0x3d5a2c, roughness: 0.9 }));
+  slab.position.set(edge - 20 - 18.5, 7.15, 6.7);
+  slab.castShadow = true;
+  h.scene.add(slab);
 }
 
 const fx = createFx(h.ctx);
@@ -146,12 +161,13 @@ const placeLabels = () => {
 
 const dir = new THREE.Vector3(1, 0, 0);
 const tmp = new THREE.Vector3();
+const burstOpts = {
+  count: params.get('count') ? Number(params.get('count')) : undefined,
+  scale: params.get('scale') ? Number(params.get('scale')) : undefined,
+};
 function fire(kind: FxKind, p: THREE.Vector3): void {
-  if (kind === 'leaves') fx.burst('leaves', tmp.copy(p).setY(p.y + 4));
-  else if (kind === 'speedLines') fx.burst('speedLines', p, { direction: dir });
-  else if (kind === 'deposit') { fx.burst('deposit', p); fx.burst('sparkle', tmp.copy(p).setY(p.y + 1.1), { count: 6, color: 0x9dffc4 }); }
-  else if (kind === 'powerup') fx.burst('powerup', p);
-  else fx.burst(kind, p);
+  if (kind === 'leaves') fx.burst('leaves', tmp.copy(p).setY(p.y + 4), burstOpts);
+  else fx.burst(kind, p, { ...burstOpts, direction: kind === 'speedLines' ? dir : undefined });
 }
 
 // speedLines needs real motion: the emitter (and Labib, and the camera if single-kind) runs along +X
@@ -215,6 +231,10 @@ if (params.get('disposeTest') === '1') {
   const result = { before, after: mem() };
   (window as unknown as { __fxDispose: unknown }).__fxDispose = result;
   console.log('[fx-dispose]', JSON.stringify(result));
+}
+
+if (params.get('windStep') === '1') {
+  setTimeout(() => { h.ctx.uniforms.uWind.value.set(-5, 0.3, 0.5); (window as unknown as { __windStepped: boolean }).__windStepped = true; }, 2000);
 }
 
 w.__fx = fx;

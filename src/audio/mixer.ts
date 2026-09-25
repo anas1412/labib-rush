@@ -19,8 +19,8 @@ export interface Mixer {
   reverb: GainNode;
 }
 
-/** Ceiling for the final soft clipper: nothing leaves the graph above −0.6 dBFS. */
-const CEILING = 0.93;
+/** Ceiling for the final soft clipper: nothing leaves the graph above −1 dBFS. */
+const CEILING = 0.89;
 
 export function createMixer(ctx: BaseAudioContext): Mixer {
   // --- master chain

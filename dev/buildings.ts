@@ -157,6 +157,7 @@ const minMain = Math.min(...plan.buildings.flatMap((b) => b.segs.filter((s) => s
 const report = { buildMs, ...part.stats, rays: rays.length, miss, narrow, minMain: Math.round(minMain * 10) / 10 };
 console.log('[buildings]', JSON.stringify(report));
 win.__bld = report;
+win.__plan = plan.buildings.map((b) => `${b.style[0]}${b.detail ? '*' : ''} ${b.cx.toFixed(0)},${b.cz.toFixed(0)} f${b.floors}${b.shops.length ? ' ' + b.shops.map((s) => s.kind).join('/') : ''}`);
 win.__bldPart = part;
 
 for (const n of (qs.get('hide') ?? '').split(',').filter(Boolean)) {
@@ -169,8 +170,9 @@ h.onFrame((dt, t) => {
 
 // ?gpu=<variant>: A/B GPU timing (EXT_disjoint_timer_query_webgl2), alternating the full scene (A)
 // with a variant (B) in 30-frame blocks so drift from other GPU users cancels out.
-// Variants: hide (no buildings), hidemas, plain / basic (simpler masonry material), noshadow (no
-// shadow casting by the buildings), noreceive, far (far shader everywhere).
+// Variants: hide (no buildings), hidemas / hideglass / hidecut, plain / basic (simpler masonry
+// material), noshadow (no shadow casting by the buildings), noproxy / nocutcast (one caster off),
+// noreceive, far (far shader everywhere), allfar (far version of every chunk).
 const gpuVariant = qs.get('gpu');
 if (gpuVariant) {
   const gl = h.renderer.getContext() as WebGL2RenderingContext;
@@ -182,7 +184,14 @@ if (gpuVariant) {
     const plain = new THREE.MeshStandardMaterial({ vertexColors: true });
     const basic = new THREE.MeshBasicMaterial({ vertexColors: true });
     const farMat = meshes.find((m) => m.name.includes('L1-masonry'))?.material as THREE.Material | undefined;
-    const apply = (b: boolean) => meshes.forEach((m, i) => {
+    const lods: THREE.LOD[] = [];
+    part.root.traverse((o) => { if ((o as THREE.LOD).isLOD && (o as THREE.LOD).levels.length > 1) lods.push(o as THREE.LOD); });
+    const lodFar = lods[0]?.levels[1].distance ?? 0;
+    const apply = (b: boolean) => {
+      lods.forEach((l) => { l.levels[1].distance = b && gpuVariant === 'allfar' ? 0.01 : lodFar; });
+      applyMeshes(b);
+    };
+    const applyMeshes = (b: boolean) => meshes.forEach((m, i) => {
       m.material = orig[i].mat; m.castShadow = orig[i].cast; m.receiveShadow = orig[i].recv; m.visible = true;
       if (!b) return;
       const mas = m.name.endsWith('masonry');
@@ -193,6 +202,10 @@ if (gpuVariant) {
       if (gpuVariant === 'far' && mas && farMat) m.material = farMat;
       if (gpuVariant === 'noreceive' && mas) m.receiveShadow = false;
       if (gpuVariant === 'basic' && mas) m.material = basic;
+      if (gpuVariant === 'noproxy' && m.name === 'bld-shadow-proxy') m.castShadow = false;
+      if (gpuVariant === 'nocutcast' && m.name.endsWith('cutout')) m.castShadow = false;
+      if (gpuVariant === 'hideglass' && m.name.endsWith('glass')) m.visible = false;
+      if (gpuVariant === 'hidecut' && m.name.endsWith('cutout')) m.visible = false;
     });
     let block = 0, n = 0;
     const A: number[] = [], B: number[] = [];

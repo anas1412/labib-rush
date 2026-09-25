@@ -1,23 +1,31 @@
 // Particle shader: all motion is evaluated on the GPU from per-particle spawn data, so the CPU only
 // writes a particle once (at burst time) and advances one time uniform per frame.
 //
-// Per-instance layout (8 × vec4, interleaved):
+// Per-instance layout (8 × vec4 + 1 × vec2, interleaved):
 //   aA  p0.xyz, birth time            aB  v0.xyz (swirl: angle0, vy, –), life
 //   aC  size0, size1, rot0, spin      aD  colour0 rgb (linear, may be HDR), alpha0
-//   aE  colour1 rgb, alpha1           aF  drag k, gravity g, wind factor, mode (= motion + 4·orient)
+//   aE  colour1 rgb, alpha1           aF  drag k, gravity g, emissive 0..1 (lit pools), mode (= motion + 4·orient)
 //   aG  axis.xyz (swirl: r0, ω, r1), groundY
 //   aH  sway amplitude, sway rate, param (twinkle rate | streak length | foil glint), shape cell
+//   aI  wind velocity xz (m/s) felt by this particle, snapshotted at spawn so a later change of the
+//       shared wind never re-simulates particles that are already flying or resting
 //
-// motion 0: drag physics  p = p0 + (v0 − a/k)(1 − e^(−kt))/k + a·t/k,  a = gravity + k·wind·windFactor
+// motion 0: drag physics  p = p0 + (v0 − a/k)(1 − e^(−kt))/k + a·t/k,  a = gravity + k·wind
 //           with flutter sway, and ground landing (bisection for the touchdown time, then rest)
 // motion 1: swirl around p0 (radius r0 → r1, angular speed ω, vertical speed vy, gravity g)
 // orient  0 camera billboard (spin) · 1 streak along velocity/axis · 2 flat on the ground · 3 tumbling 3D
-import { AdditiveBlending, DoubleSide, NormalBlending, ShaderMaterial, Vector3, type IUniform, type Texture } from 'three';
+//
+// Lit pools sample the sun's cascaded shadow map (three's SunLight) once per particle, at its centre,
+// in the vertex shader: particles under the ficus canopy or in facade shade are lit by the sky only.
+// All pools take the scene fog (the engine's height fog chunks); additive glows are only attenuated.
+import {
+  AdditiveBlending, DoubleSide, NormalBlending, ShaderMaterial, UniformsLib, UniformsUtils, type IUniform, type Texture, type Vector3,
+} from 'three';
 import { ATLAS_COLS, ATLAS_ROWS } from './atlas';
 
 const vertex = /* glsl */ `
 uniform float uTime;
-uniform vec3 uWind;
+uniform vec3 uSunDir;
 attribute vec4 aA;
 attribute vec4 aB;
 attribute vec4 aC;
@@ -26,6 +34,7 @@ attribute vec4 aE;
 attribute vec4 aF;
 attribute vec4 aG;
 attribute vec4 aH;
+attribute vec2 aI;
 varying vec2 vUv;
 varying vec4 vColor;
 varying float vShape;
@@ -34,6 +43,27 @@ varying vec3 vWorld;
 varying float vGround;
 varying float vParam;
 varying float vSize;
+varying float vSun;
+varying float vEmit;
+#include <fog_pars_vertex>
+
+#if defined( LIT ) && defined( USE_SHADOWMAP ) && defined( SHADOWMAP_TYPE_PCF ) && NUM_SUN_LIGHT_SHADOWS > 0
+  #define SUN_SHADOW
+  // same uniforms three binds for its SunLight (2 cascades, see SunLightShadow.js)
+  struct SunLightShadow { float shadowIntensity; float shadowBias; float shadowNormalBias; float shadowRadius; vec2 shadowMapSize; };
+  uniform SunLightShadow sunLightShadows[ NUM_SUN_LIGHT_SHADOWS ];
+  uniform sampler2DShadow sunShadowMap[ NUM_SUN_LIGHT_SHADOWS ];
+  uniform mat4 sunShadowMatrix[ NUM_SUN_LIGHT_SHADOWS * 2 ];
+  uniform vec4 sunShadowCascade[ NUM_SUN_LIGHT_SHADOWS * 2 ];
+  float sunVisibility( vec3 wp, float viewDepth ) {
+    if ( viewDepth >= sunShadowCascade[ 1 ].y ) return 1.0;
+    vec4 sc = ( viewDepth < sunShadowCascade[ 0 ].y ? sunShadowMatrix[ 0 ] : sunShadowMatrix[ 1 ] ) * vec4( wp, 1.0 );
+    sc.xyz /= sc.w;
+    if ( sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0 ) return 1.0;
+    float s = texture( sunShadowMap[ 0 ], vec3( sc.xy, sc.z + sunLightShadows[ 0 ].shadowBias ) );
+    return mix( 1.0, s, sunLightShadows[ 0 ].shadowIntensity );
+  }
+#endif
 
 vec3 dragPos(vec3 p0, vec3 v0, vec3 a, float k, float t) {
   if (k < 1e-3) return p0 + v0 * t + 0.5 * a * t * t;
@@ -56,7 +86,7 @@ void main() {
   float orient = floor(aF.w / 4.0 + 0.01);
   float motion = aF.w - orient * 4.0;
   float k = aF.x;
-  vec3 acc = vec3(0.0, -aF.y, 0.0) + k * aF.z * vec3(uWind.x, 0.0, uWind.z);
+  vec3 acc = vec3(k * aI.x, -aF.y, k * aI.y);
 
   vec3 p, vel;
   bool landed = false;
@@ -143,7 +173,15 @@ void main() {
   vGround = aG.w;
   vParam = param;
   vSize = size;
-  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+  vEmit = aF.z;
+  vSun = 1.0;
+#ifdef SUN_SHADOW
+  // one lookup at the centre (nudged 10 cm toward the sun, clear of the ground it may rest on)
+  vSun = sunVisibility(p + uSunDir * 0.1, -(viewMatrix * vec4(p, 1.0)).z);
+#endif
+  vec4 mvPosition = viewMatrix * vec4(wp, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
 }
 `;
 
@@ -160,6 +198,9 @@ varying vec3 vWorld;
 varying float vGround;
 varying float vParam;
 varying float vSize;
+varying float vSun;
+varying float vEmit;
+#include <fog_pars_fragment>
 
 void main() {
   vec2 cell = vec2(mod(vShape, ${ATLAS_COLS}.0), floor(vShape / ${ATLAS_COLS}.0 + 0.01));
@@ -167,6 +208,7 @@ void main() {
   float a = tex.a * vColor.a;
   vec3 col = vColor.rgb * tex.rgb;
 #ifdef LIT
+  vec3 sun = uSun * vSun;
   vec3 V = normalize(cameraPosition - vWorld);
   #ifdef SOLID
     vec3 n = normalize(vNormal);
@@ -174,10 +216,11 @@ void main() {
     float ndl = dot(n, uSunDir);
     float diff = max(ndl, 0.0) + 0.3 * max(-ndl, 0.0); // thin paper / leaf lets some sun through
     float spec = pow(max(dot(n, normalize(uSunDir + V)), 0.0), 48.0) * vParam; // foil glint
-    col = col * (uSky + uSun * diff) + uSun * spec;
+    vec3 lit = col * (uSky + sun * diff) + sun * spec;
   #else
-    col = col * (uSky + uSun * 0.6);
+    vec3 lit = col * (uSky + sun * 0.6);
   #endif
+  col = mix(lit, col, vEmit); // emissive pieces (alpha-blended reward stars) keep their colour
 #endif
 #ifndef SOLID
   // soft contact where a blended sprite meets the ground, instead of a hard depth-test edge
@@ -187,9 +230,20 @@ void main() {
   if (a < 0.5) discard;
   a = 1.0;
 #endif
+#if defined( USE_FOG ) && !defined( LIT )
+  // Additive light is only dimmed by haze (mixing toward the fog colour would add a glowing veil).
+  // The fog chunk returns mix(rgb, fogColour, f); fed a huge constant it yields (1 − f) to within
+  // fogColour·f / 1024, whichever fog chunk (three's or the engine's height fog) is installed.
+  gl_FragColor = vec4(1024.0);
+  #include <fog_fragment>
+  a *= gl_FragColor.r / 1024.0;
+#endif
   gl_FragColor = vec4(col, a);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
+#ifdef LIT
+  #include <fog_fragment>
+#endif
 }
 `;
 
@@ -198,17 +252,18 @@ export type PoolKind = 'glow' | 'soft' | 'solid';
 export interface ParticleUniforms {
   [name: string]: IUniform;
   uTime: { value: number };
-  uWind: { value: Vector3 };
   uAtlas: { value: Texture };
   uSunDir: { value: Vector3 };
   uSun: { value: Vector3 };
   uSky: { value: Vector3 };
 }
 
-/** glow: additive, unlit, HDR (feeds bloom) · soft: alpha-blended lit puffs · solid: lit cut-outs (depth-writing). */
-export function createParticleMaterial(kind: PoolKind, uniforms: ParticleUniforms): ShaderMaterial {
+/** glow: additive, unlit, HDR (feeds bloom) · soft: alpha-blended lit puffs (or emissive pieces) ·
+ *  solid: lit cut-outs (depth-writing). `shared` uniforms are referenced, not copied. */
+export function createParticleMaterial(kind: PoolKind, shared: ParticleUniforms): ShaderMaterial {
+  const lit = kind !== 'glow';
   const m = new ShaderMaterial({
-    uniforms,
+    uniforms: { ...UniformsUtils.merge(lit ? [UniformsLib.fog, UniformsLib.lights] : [UniformsLib.fog]), ...shared },
     vertexShader: vertex,
     fragmentShader: fragment,
     defines: kind === 'glow' ? {} : kind === 'soft' ? { LIT: '' } : { LIT: '', SOLID: '' },
@@ -216,6 +271,8 @@ export function createParticleMaterial(kind: PoolKind, uniforms: ParticleUniform
     depthWrite: kind === 'solid',
     blending: kind === 'glow' ? AdditiveBlending : NormalBlending,
     side: DoubleSide,
+    fog: true,
+    lights: lit, // only to receive three's sun shadow uniforms; shading uses uSun / uSky
   });
   m.forceSinglePass = true;
   return m;

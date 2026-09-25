@@ -265,10 +265,10 @@ export const WET: Partial<Record<SfxName, number>> = {
 
 /** Per-sound trim (linear), set from the offline loudness measurements (scripts/juice-audio.mjs). */
 export const LEVEL: Partial<Record<SfxName, number>> = {
-  // loudness plan (raw 100 ms RMS at sfx bus 1): steps/UI ≈ −28, frequent feedback −23…−19,
+  // loudness plan (raw 100 ms RMS at sfx bus 1): steps ≈ −25 (clear of the darbouka), UI ≈ −28, frequent feedback −23…−19,
   // rewards −18…−16, big moments (trick shot, new best, game over, hit) −16…−14
   pickupRare: 1.26, bagFull: 1.8, deposit: 0.83, trickShot: 0.88, cheer: 1.5, caught: 0.95, litterThrown: 1.15,
-  powerup: 2.4, powerupEnd: 1.1, timeAdded: 1.3, hit: 0.63, honk: 1.2, jump: 1.5, land: 0.7, footstep: 1.4, kick: 0.72,
+  powerup: 2.4, powerupEnd: 1.1, timeAdded: 1.3, hit: 0.63, honk: 1.2, jump: 1.5, land: 0.7, footstep: 2.1, kick: 0.72,
   radar: 1.05, comboUp: 1.45, comboBreak: 1.14, tick: 1.37, countdown: 0.7, go: 0.8, gameOver: 0.75, newBest: 1.4,
   uiClick: 1.4, uiHover: 1.7, uiBack: 1.3, birds: 1.7,
 };
