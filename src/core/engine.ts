@@ -76,6 +76,8 @@ const FOG_FALLOFF = 0.03; // 1/m, height fog e-folds every ~33 m
 
 // Dynamic resolution
 const TARGET_FPS = 60;
+/** Dynamic-resolution target: main.ts caps 'low'/'medium' at 30 fps, 'high'/'ultra' at 60. */
+const targetFor = (q: Quality) => (q === 'low' || q === 'medium' ? 30 : TARGET_FPS);
 const MIN_SCALE = 0.6;
 const EVAL_WINDOW_MS = 750;
 const PROBE_BACKOFF_MS = [15000, 30000, 60000, 120000]; // wait after each failed step up
@@ -205,7 +207,7 @@ export function createEngine(container: HTMLElement): CoreEngine {
   // reveals it, the scale is restored and the cap becomes the target until fps exceeds it again.
   let lastFrameAt = 0;
   let emaMs = 1000 / 60;
-  let target = TARGET_FPS;
+  let target = targetFor(quality);
   let winMs = 0, winFrames = 0, prevWinFps = 0;
   let lowStreak = 0, highStreak = 0;
   let lastUpAt = -1e9, upBlockedUntil = 0, failedProbes = 0;
@@ -219,7 +221,7 @@ export function createEngine(container: HTMLElement): CoreEngine {
   }
 
   function resetDynamic(): void {
-    target = TARGET_FPS; failedProbes = 0; upBlockedUntil = 0; pendingDown = null;
+    target = targetFor(quality); failedProbes = 0; upBlockedUntil = 0; pendingDown = null;
   }
 
   function setScale(s: number): void {
@@ -253,7 +255,7 @@ export function createEngine(container: HTMLElement): CoreEngine {
       pendingDown = null;
       if (fps < p.fps * HELPED) { target = Math.max(20, p.fps); setScale(p.scale); return; } // capped
     }
-    if (target < TARGET_FPS && fps > target * 1.1) target = TARGET_FPS; // the cap is gone
+    if (target < targetFor(quality) && fps > target * 1.1) target = targetFor(quality); // the cap is gone
     if (fps < target * 0.92) {
       highStreak = 0;
       if (now - lastUpAt < 3000) { // the last step up was too much: back off, longer every time

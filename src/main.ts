@@ -6,7 +6,7 @@ import { Assets } from './core/assets';
 import { Emitter } from './core/events';
 import { FIXED_DT, Physics } from './core/physics';
 import { PLAYER_SPAWN } from './core/layout';
-import type { GameContext, GameEvents, InputFrame, Quality, Settings, UIHandlers } from './core/types';
+import type { GameContext, GameEvents, InputFrame, Settings, UIHandlers } from './core/types';
 import { createEngine } from './core/engine';
 import { createInput } from './core/input';
 import { createPlayerController } from './player/controller';
@@ -26,7 +26,6 @@ import { createFx } from './fx/fx';
 import { createSession } from './gameplay/session';
 import { createFeedback } from './gameplay/feedback';
 
-const DETECTED_KEY = `${STORAGE_PREFIX}detectedQuality`;
 const OVER_BEAT = 1.2; // s between the final whistle and the results screen
 
 function webgl2(): boolean {
@@ -89,10 +88,7 @@ async function boot(): Promise<void> {
   paint();
 
   const engine = createEngine(app);
-  let detected: Quality | null = null;
-  try { const q = localStorage.getItem(DETECTED_KEY); if (q === 'low' || q === 'medium' || q === 'high' || q === 'ultra') detected = q; } catch { /* blocked */ }
-  if (settings.quality !== 'auto') engine.setQuality(settings.quality);
-  else if (detected) engine.setQuality(detected);
+  engine.setQuality(settings.quality);
 
   const assets = new Assets(engine.renderer);
   assets.onProgress = (p) => { assetP = p; paint(); };
@@ -141,18 +137,7 @@ async function boot(): Promise<void> {
   let paused = false;
   let overT = 0;
   let overResult: GameEvents['runEnd']['result'] | null = null;
-  let detecting: Promise<void> | null = null;
   const store = createStore(STORAGE_PREFIX); // read-only use: the player's best before a run is saved
-
-  function detectQuality(): Promise<void> {
-    detecting ??= engine.autoDetectQuality(2).then((q) => {
-      detecting = null;
-      if (ui.getSettings().quality !== 'auto') { engine.setQuality(ui.getSettings().quality as Quality); return; } // picked one meanwhile
-      try { localStorage.setItem(DETECTED_KEY, q); } catch { /* blocked */ }
-      fx.setQuality(engine.quality);
-    });
-    return detecting;
-  }
 
   function toMenu(): void {
     mode = 'menu';
@@ -162,14 +147,7 @@ async function boot(): Promise<void> {
     audio.setPaused(false);
     audio.setMenuMusic(true);
   }
-  let starting = false;
   async function startRun(): Promise<void> {
-    if (detecting) { // re-detect after a settings change: never probe presets during a run
-      if (starting) return;
-      starting = true;
-      await detecting;
-      starting = false;
-    }
     paused = false;
     overResult = null;
     session.start();
@@ -212,8 +190,7 @@ async function boot(): Promise<void> {
     input.setSettings(s);
     rig.setSettings(s);
     if (qChanged) {
-      if (s.quality === 'auto') void detectQuality();
-      else engine.setQuality(s.quality);
+      engine.setQuality(s.quality);
       fx.setQuality(engine.quality);
     }
   };
@@ -234,7 +211,11 @@ async function boot(): Promise<void> {
   let acc = 0;
   let last = performance.now();
 
+  // Frame cap: 30 fps on 'low'/'medium' (steadier on weak devices, saves battery), 60 on 'high'/'ultra'.
+  // 2 ms slack so a 60 Hz display's rAF jitter doesn't drop frames.
   function frame(now: number): void {
+    const minMs = 1000 / (engine.quality === 'low' || engine.quality === 'medium' ? 30 : 60) - 2;
+    if (now - last < minMs) return;
     const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
     last = now;
     if (document.hidden) return;
@@ -287,12 +268,6 @@ async function boot(): Promise<void> {
   engine.renderer.setAnimationLoop(frame);
 
   toMenu();
-  // First visit on 'auto': probe presets under the loading screen (the scene renders behind it), so no
-  // shader recompiles or quality jumps reach the menu or a run. Later visits reuse the saved result.
-  if (settings.quality === 'auto' && !detected) {
-    ui.setLoading(shown, 'Tuning graphics for your device');
-    await detectQuality();
-  }
   ui.finishLoading();
 
   if (import.meta.env.DEV) {

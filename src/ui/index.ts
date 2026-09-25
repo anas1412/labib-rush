@@ -441,7 +441,7 @@ export function createUI(root: HTMLElement, handlers: UIHandlers, opts: UIOption
   append(settingsScreen.el, append(panel('ui-wide ui-settings'), title('Settings'),
     append(el('div', 'ui-set-grid'),
       append(el('section', 'ui-set-group'), el('h3', '', 'Graphics'),
-        settingRow('Quality', segmented('quality', [['auto', 'Auto'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']]))),
+        settingRow('Quality', segmented('quality', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']]))),
       append(el('section', 'ui-set-group'), el('h3', '', 'Audio'),
         settingRow('Music', slider('musicVolume', 0, 1, 0.05, pct), 'ui-set-musicVolume'),
         settingRow('Sound effects', slider('sfxVolume', 0, 1, 0.05, pct), 'ui-set-sfxVolume'),

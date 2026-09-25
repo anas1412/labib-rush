@@ -93,7 +93,7 @@ export function validateName(raw: string): NameCheck {
 
 // ---- settings (pure) ------------------------------------------------------------------------
 
-const QUALITIES: readonly (Quality | 'auto')[] = ['auto', 'low', 'medium', 'high', 'ultra'];
+const QUALITIES: readonly Quality[] = ['low', 'medium', 'high', 'ultra']; // a saved legacy 'auto' falls back to the default
 const clamp = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
 const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
 

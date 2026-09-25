@@ -12,7 +12,7 @@ export type LitterKind = 'can' | 'bottle' | 'chips' | 'bag' | 'golden';
 export type PowerUpKind = 'tea' | 'bambalouni' | 'mashmoum' | 'chechia';
 
 export interface Settings {
-  quality: Quality | 'auto';
+  quality: Quality;
   musicVolume: number; // 0..1
   sfxVolume: number; // 0..1
   muted: boolean;
@@ -24,7 +24,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  quality: 'auto',
+  quality: 'medium',
   musicVolume: 0.6,
   sfxVolume: 0.8,
   muted: false,
