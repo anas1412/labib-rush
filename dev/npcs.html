@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NPCs — dev</title>
+    <link rel="icon" href="data:," />
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+      #app { position: fixed; inset: 0; }
+      #hud { position: fixed; left: 10px; top: 10px; z-index: 40; pointer-events: none; font: 12px/1.45 ui-monospace, Menlo, monospace;
+        color: #fff; background: rgba(12, 14, 18, 0.55); padding: 7px 10px; border-radius: 8px; white-space: pre; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud"></div>
+    <script type="module" src="./npcs.ts"></script>
+  </body>
+</html>

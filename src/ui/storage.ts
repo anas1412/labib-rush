@@ -109,6 +109,7 @@ export function sanitizeSettings(v: unknown): Settings {
     mouseSensitivity: clamp(s.mouseSensitivity, 0.2, 3, d.mouseSensitivity),
     invertY: bool(s.invertY, d.invertY),
     cameraShake: bool(s.cameraShake, d.cameraShake),
+    keyboard: s.keyboard === 'qwerty' || s.keyboard === 'azerty' ? s.keyboard : d.keyboard,
   };
 }
 

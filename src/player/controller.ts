@@ -54,7 +54,7 @@ export function createPlayerController(physics: Physics, avatar: LabibAvatar, ev
   cc.setMinSlopeSlideAngle(MIN_SLIDE);
   cc.setSlideEnabled(true);
   cc.setApplyImpulsesToDynamicBodies(false);
-  const moveGroups = groups(G.PLAYER, G.STATIC | G.LOW_PROP | G.NPC);
+  const moveGroups = groups(G.PLAYER, G.STATIC | G.LOW_PROP | G.NPC | G.VEHICLE);
   const moveFlags = R.QueryFilterFlags.EXCLUDE_SENSORS;
 
   const position = PLAYER_SPAWN.clone();

@@ -388,6 +388,7 @@ export function createUI(root: HTMLElement, handlers: UIHandlers, opts: UIOption
     settings = { ...settings, [k]: v };
     store.setSettings(settings);
     handlers.onSettingsChange({ ...settings });
+    if (k === 'keyboard') paintKeys();
     notice.classList.toggle('ui-on', !store.persistent);
   }
   const refreshers: (() => void)[] = [];
@@ -446,6 +447,7 @@ export function createUI(root: HTMLElement, handlers: UIHandlers, opts: UIOption
         settingRow('Sound effects', slider('sfxVolume', 0, 1, 0.05, pct), 'ui-set-sfxVolume'),
         settingRow('Mute all', toggle('muted'), 'ui-set-muted')),
       append(el('section', 'ui-set-group'), el('h3', '', 'Controls'),
+        settingRow('Keyboard', segmented('keyboard', [['azerty', 'AZERTY · ZQSD'], ['qwerty', 'QWERTY · WASD']])),
         settingRow('Look sensitivity', slider('mouseSensitivity', 0.2, 3, 0.05, (v) => `×${v.toFixed(2)}`), 'ui-set-mouseSensitivity'),
         settingRow('Invert Y', toggle('invertY'), 'ui-set-invertY'),
         settingRow('Camera shake', toggle('cameraShake'), 'ui-set-cameraShake'))),
@@ -455,14 +457,25 @@ export function createUI(root: HTMLElement, handlers: UIHandlers, opts: UIOption
   const keycaps = (...keys: string[]) => append(el('span', 'ui-keys'), ...keys.map((k) => el('kbd', '', k)));
   const ctrl = (keys: HTMLElement, what: string) => append(el('li', 'ui-ctrl'), keys, el('span', '', what));
   const iconCap = (svg: string) => append(el('span', 'ui-keys'), icon(svg, 'ui-ico ui-ico-cap'));
-  const desktopControls = append(el('div', 'ui-ctrl-set'), append(el('ul', ''),
-    ctrl(keycaps('W', 'A', 'S', 'D'), 'Move (or arrow keys)'),
-    ctrl(iconCap(ICON.mouse), 'Look: click the game to capture the mouse'),
-    ctrl(keycaps('Shift'), 'Sprint'),
-    ctrl(keycaps('Space'), 'Jump'),
-    ctrl(keycaps('F'), 'Kick (or left click)'),
-    ctrl(keycaps('Q'), 'Ear radar'),
-    ctrl(keycaps('Esc'), 'Pause')));
+  // Keys map by physical position (core/input.ts), so only the printed letters follow the setting.
+  const keyNames = () => (settings.keyboard === 'azerty'
+    ? { move: ['Z', 'Q', 'S', 'D'], kick: 'F / A', radar: 'E' }
+    : { move: ['W', 'A', 'S', 'D'], kick: 'F', radar: 'Q' });
+  const desktopControls = el('div', 'ui-ctrl-set');
+  function paintKeys(): void {
+    const k = keyNames();
+    desktopControls.replaceChildren(append(el('ul', ''),
+      ctrl(keycaps(...k.move), 'Move (or arrow keys)'),
+      ctrl(iconCap(ICON.mouse), 'Look: click the game to capture the mouse'),
+      ctrl(keycaps('Shift'), 'Sprint'),
+      ctrl(keycaps('Space'), 'Jump'),
+      ctrl(keycaps(k.kick), 'Kick (or left click)'),
+      ctrl(keycaps(k.radar), 'Ear radar'),
+      ctrl(keycaps('Esc'), 'Pause')));
+    const radarKey = hud.el.querySelector('.ui-radar-key');
+    if (radarKey) radarKey.textContent = k.radar;
+  }
+  paintKeys();
   const touchControls = append(el('div', 'ui-ctrl-set'), append(el('ul', ''),
     ctrl(iconCap(ICON.joystick), 'Left thumb: move. Push past the rim to sprint'),
     ctrl(iconCap(ICON.swipe), 'Drag on the right side: look around'),
@@ -641,11 +654,11 @@ export function createUI(root: HTMLElement, handlers: UIHandlers, opts: UIOption
 
   // ---- first-play controls card + hints -------------------------------------------------------
   const HINTS: Record<HintId, { desk: string; touch: string; svg: string }> = {
-    move: { desk: 'WASD to run · Shift to sprint · Space to jump', touch: 'Left thumb to run · drag the right side to look', svg: ICON.joystick },
+    move: { desk: 'MOVE to run · Shift to sprint · Space to jump', touch: 'Left thumb to run · drag the right side to look', svg: ICON.joystick },
     pickup: { desk: 'Run over litter to grab it. Chain pickups for a combo!', touch: 'Run over litter to grab it. Chain pickups for a combo!', svg: ICON.star },
     deposit: { desk: 'Bag getting full? Follow the arrow to a bin to cash in.', touch: 'Bag getting full? Follow the arrow to a bin to cash in.', svg: ICON.bin },
-    kick: { desk: 'F or click to kick cans. Land one in a bin: GOOOAL!', touch: 'Tap Kick near a can. Land it in a bin: GOOOAL!', svg: ICON.star },
-    radar: { desk: 'Press Q: Labib’s ears reveal litter through walls.', touch: 'Tap Radar: Labib’s ears reveal litter through walls.', svg: ICON.ears },
+    kick: { desk: 'KICK or click to kick cans. Land one in a bin: GOOOAL!', touch: 'Tap Kick near a can. Land it in a bin: GOOOAL!', svg: ICON.star },
+    radar: { desk: 'Press RADAR: Labib’s ears reveal litter through walls.', touch: 'Tap Radar: Labib’s ears reveal litter through walls.', svg: ICON.ears },
     litterbug: { desk: 'See the ⚠ icon? Touch the litterbug fast: Caught!', touch: 'See the ⚠ icon? Touch the litterbug fast: Caught!', svg: ICON.warn },
   };
   const controlsCard = el('div', 'ui-controls-card');
@@ -659,14 +672,15 @@ export function createUI(root: HTMLElement, handlers: UIHandlers, opts: UIOption
   function showHintNow(id: HintId): void {
     store.markHint(id);
     const h = HINTS[id];
-    hud.hint(touch ? h.touch : h.desk, h.svg);
+    const k = keyNames();
+    hud.hint(touch ? h.touch : h.desk.replace('MOVE', k.move.join('')).replace('KICK', k.kick).replace('RADAR', k.radar), h.svg);
   }
   function showControlsOnce(): void {
     if (store.hintSeen('controls')) return;
     store.markHint('controls');
     store.markHint('move'); // the card already covers it
     controlsCard.replaceChildren(el('strong', 'ui-cc-title', 'Controls'), (touch ? touchControls : desktopControls).cloneNode(true));
-    controlsT.show(9000);
+    controlsT.show(touch ? 5500 : 9000); // touch: the card sits over the play area, keep it brief
   }
 
   // ---- rotate-your-phone: pause when a touch player turns the phone upright mid-run -----------

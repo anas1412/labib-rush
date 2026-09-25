@@ -147,7 +147,9 @@ export function createInput(canvas: HTMLElement, settings: Settings): Input {
     switch (e.code) {
       case 'Space': jumpEdge = true; break;
       case 'KeyF': kickEdge = true; break;
-      case 'KeyQ': radarEdge = true; break;
+      // Physical keys: on AZERTY the KeyQ position is the letter A (kick), radar moves to E.
+      case 'KeyQ': if (cfg.keyboard === 'azerty') kickEdge = true; else radarEdge = true; break;
+      case 'KeyE': radarEdge = true; break;
       case 'Escape': case 'KeyP': pauseEdge = true; break;
     }
   }

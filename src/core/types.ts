@@ -19,6 +19,8 @@ export interface Settings {
   mouseSensitivity: number; // 0.2..3, 1 = default
   invertY: boolean;
   cameraShake: boolean;
+  /** Letters shown in hints. Keys map by physical position (event.code), so both layouts play the same. */
+  keyboard: 'azerty' | 'qwerty';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -29,6 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mouseSensitivity: 1,
   invertY: false,
   cameraShake: true,
+  keyboard: 'azerty',
 };
 
 /** One saved leaderboard row (browser localStorage). */
