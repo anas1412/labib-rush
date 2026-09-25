@@ -4,7 +4,7 @@
 import { MathUtils, Vector3 } from 'three';
 import { G, groups, type Physics } from '../core/physics';
 import { PLAYER } from '../core/config';
-import { PLAYER_SPAWN, PLAYER_SPAWN_YAW } from '../core/layout';
+import { PLAYER_SPAWN, PLAYER_SPAWN_YAW, inPlayArea } from '../core/layout';
 import type { Emitter } from '../core/events';
 import type { AvatarMotion, AvatarState, GameEvents, InputFrame, LabibAvatar, PlayerController } from '../core/types';
 
@@ -63,6 +63,7 @@ export function createPlayerController(physics: Physics, avatar: LabibAvatar, ev
   // `velocity` so a frame of contact with a curb edge (before autostep lifts us) costs no speed.
   let mvx = 0, mvz = 0;
   let yaw = PLAYER_SPAWN_YAW;
+  const lastSafe = PLAYER_SPAWN.clone(); // last grounded spot inside the play area
   let grounded = false;
   let stunTimer = 0;
   let speedMult = 1;
@@ -235,6 +236,8 @@ export function createPlayerController(physics: Physics, avatar: LabibAvatar, ev
     }
 
     if (position.y < KILL_Y) { reset(PLAYER_SPAWN, PLAYER_SPAWN_YAW); return; }
+    if (!inPlayArea(position.x, position.z)) { reset(lastSafe, yaw); return; } // escaped over something
+    if (grounded) lastSafe.copy(position);
 
     // ---- avatar ----
     let state: AvatarState;

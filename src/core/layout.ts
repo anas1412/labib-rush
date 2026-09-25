@@ -143,3 +143,26 @@ export const LITTER_ZONES = [
   { xMin: X_MIN + 4, xMax: PLAZA_WEST.xMax, zMin: -26, zMax: 26, y: CURB }, // west plaza
   { xMin: PLAZA_EAST.xMin, xMax: X_MAX - 4, zMin: -26, zMax: 26, y: CURB }, // east plaza
 ] as const;
+
+/** Where the player may stand (horizontal footprint only). The controller puts Labib back at his
+ *  last valid spot if he ever leaves it — a safety net behind the colliders (e.g. climbing props to
+ *  hop a fence). Rects: [xMin, xMax, zMin, zMax]. */
+const PLAY_RECTS: [number, number, number, number][] = [
+  [X_MIN, X_MAX, Z.northFacade - 1, Z.southFacade + 1], // avenue + plazas (facade plinths included)
+  ...ALLEYS.map((a): [number, number, number, number] =>
+    a.side < 0 ? [a.x - a.width / 2, a.x + a.width / 2, Z.northFacade - a.depth, Z.northFacade]
+      : [a.x - a.width / 2, a.x + a.width / 2, Z.southFacade, Z.southFacade + a.depth]),
+  ...CROSS_STREETS.flatMap((c): [number, number, number, number][] => [
+    [c.x - c.width / 2, c.x + c.width / 2, Z.northFacade - c.depth, Z.northFacade],
+    [c.x - c.width / 2, c.x + c.width / 2, Z.southFacade, Z.southFacade + c.depth],
+  ]),
+  [LANDMARKS.cathedral.xMin, LANDMARKS.cathedral.xMax, Z.northFacade - 10, Z.northFacade], // steps + porch
+  [LANDMARKS.theatre.xMin, LANDMARKS.theatre.xMax, Z.northFacade - 8, Z.northFacade], // entrance
+  [LANDMARKS.colisee.xMin, LANDMARKS.colisee.xMax, Z.southFacade, Z.southFacade + 15], // gallery passage
+  [LANDMARKS.embassy.xMin, LANDMARKS.embassy.xMax, Z.southFacade, Z.southFacade + 2.3], // up to the railing
+];
+
+export function inPlayArea(x: number, z: number): boolean {
+  for (const [x0, x1, z0, z1] of PLAY_RECTS) if (x >= x0 && x <= x1 && z >= z0 && z <= z1) return true;
+  return false;
+}

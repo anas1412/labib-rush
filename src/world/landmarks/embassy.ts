@@ -163,7 +163,7 @@ export function buildEmbassy(env: Env): Landmark {
   root.add(flag.root);
 
   // Colliders
-  env.aabb(x0, Y0, ZFENCE - 0.4, x1, Y0 + 3.2, ZFENCE + 0.4);
+  env.aabb(x0, Y0, ZFENCE - 0.4, x1, Y0 + 8, ZFENCE + 0.4); // taller than the railing: can't be hopped from the booth
   env.aabb(X0 - BW / 2, Y0, ZB, X0 + BW / 2, Y0 + 11, ZB + BD);
   for (const x of [x0 + 0.25, x1 - 0.25]) env.aabb(x - 0.25, Y0, ZFENCE, x + 0.25, Y0 + 3.2, ZB);
   env.aabb(bx - 0.9, Y0, bz - 0.9, bx + 0.9, Y0 + 2.6, bz + 0.9);
