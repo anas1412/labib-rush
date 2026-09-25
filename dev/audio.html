@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio — dev</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 20px; font: 14px/1.4 system-ui, sans-serif; background: #15181d; color: #e8e4dc; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: #9aa3ad; margin: 18px 0 8px; }
+      .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      button { background: #262b33; color: inherit; border: 1px solid #39414c; border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
+      button:hover { background: #313844; }
+      button.on { background: #1f6f4a; border-color: #2c9c68; }
+      label { display: inline-flex; gap: 6px; align-items: center; margin-right: 14px; }
+      #log { margin-top: 16px; font: 12px/1.5 ui-monospace, monospace; color: #9aa3ad; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Labib Rush — audio engine</h1>
+    <div id="app"></div>
+    <div id="log"></div>
+    <script type="module" src="./audio.ts"></script>
+  </body>
+</html>

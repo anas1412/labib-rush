@@ -161,6 +161,7 @@ export interface PlayerController {
   knockback(direction: Vector3, strength: number, stunSec: number): void;
   setSpeedMultiplier(m: number): void;
   reset(position: Vector3, yaw: number): void;
+  dispose(): void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -345,10 +346,15 @@ export interface TaxiModel {
   honk(): void; // visual: headlight flash
 }
 
+export interface LitterShape { radius: number; halfLength: number; half: { x: number; y: number; z: number } }
+
 export interface PropFactory {
   litter(kind: LitterKind): Object3D; // 'bag' flutters via shared uniforms
   /** Approximate collision radius (m) for a kicked item's ball/capsule collider. */
   litterRadius(kind: LitterKind): number;
+  /** Exact collider shape: capsule along local X centred at (0, radius, 0) with segment half-length
+   *  `halfLength` (can/bottle/golden), box `half` centred at (0, half.y, 0) (chips), ball (bag). */
+  litterShape(kind: LitterKind): LitterShape;
   bin(): BinModel;
   powerup(kind: PowerUpKind): Object3D; // display model ~0.5 m, gameplay adds bobbing
   taxi(variant?: number): TaxiModel;
@@ -372,5 +378,62 @@ export interface Person {
 export interface PeopleFactory {
   /** Deterministic variety from a seed (clothes, skin tone, height, hair, accessories). */
   create(seed: number): Person;
+  dispose(): void;
+}
+
+// ---------------------------------------------------------------------------------------------
+// PHASE C (not yet implemented; ignore during phase B): gameplay session + NPC systems. main.ts wires them:
+//   const session = createSession(ctx, props);                  // src/gameplay/session.ts
+//   const crowd = createCrowd(ctx, people, session.hooks);      // src/npc/crowd.ts
+//   const traffic = createTraffic(ctx, props, session.hooks);   // src/npc/traffic.ts
+//   session.attach({ crowd, traffic });
+//   per frame while playing: player.update → session.update(dt, frame) (also updates crowd/traffic)
+//   in menus: session.updateAmbient(dt) keeps crowd/traffic/birds alive behind the menu.
+
+/** Callbacks NPC systems use to talk to the gameplay session. */
+export interface SessionHooks {
+  /** A litterbug throws an item: gameplay spawns a flying litter item and returns its id. */
+  throwLitter(from: Vector3, velocity: Vector3): number;
+  /** Labib touched a litterbug within RULES.caughtWindow s of its throw (litterId from throwLitter).
+   *  Gameplay awards points and removes that item (the person picks it up). */
+  caught(position: Vector3, litterId: number): void;
+  /** Player position/velocity for NPC reactions (read-only). */
+  player(): { position: Vector3; velocity: Vector3; sprinting: boolean };
+  /** A taxi hit Labib. direction = unit vector pushing Labib away, speed = taxi speed m/s. */
+  hitPlayer(direction: Vector3, speed: number): void;
+  /** Is a run in progress (NPCs only throw litter / honk during play)? */
+  isPlaying(): boolean;
+}
+
+export interface Crowd {
+  /** Pedestrians, café patrons, litterbugs, pigeons/starlings. */
+  update(dt: number, time: number): void;
+  setDifficulty(level: number): void; // 0,1,2,… — more litterbugs, faster throws
+  /** Nearby people cheer (trick shot, new best). */
+  cheer(position: Vector3, radius: number): void;
+  reset(): void; // new run: clear pending throws, reposition
+  dispose(): void;
+}
+
+export interface Traffic {
+  /** Yellow taxis driving TAXI_ROUTES. */
+  update(dt: number, time: number): void;
+  setDifficulty(level: number): void; // denser, slightly faster traffic
+  reset(): void;
+  dispose(): void;
+}
+
+export interface GameSession {
+  readonly hooks: SessionHooks;
+  attach(systems: { crowd: Crowd; traffic: Traffic }): void;
+  /** Starts a fresh run (clears litter, resets rules, player to spawn, countdown 3-2-1-GO). */
+  start(): void;
+  /** Per rendered frame during play (after player.update). */
+  update(dt: number, frame: InputFrame): void;
+  /** Per frame while in menus/paused-free states: ambient life only (no timer). */
+  updateAmbient(dt: number): void;
+  readonly playing: boolean;
+  /** Ends the current run early (quit to menu). */
+  abort(): void;
   dispose(): void;
 }

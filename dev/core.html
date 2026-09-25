@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Labib Rush · core dev (graybox)</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; overscroll-behavior: none; }
+      #app { position: fixed; inset: 0; }
+      #dev-hud { position: fixed; left: 10px; top: 10px; z-index: 40; pointer-events: none; font: 12px/1.45 ui-monospace, Menlo, monospace;
+        color: #fff; background: rgba(12, 14, 18, 0.55); padding: 7px 10px; border-radius: 8px; white-space: pre; backdrop-filter: blur(4px); }
+      #dev-pause { position: fixed; inset: 0; z-index: 45; display: none; place-items: center; background: rgba(10, 12, 16, 0.45);
+        color: #fff; font: 600 20px/1.4 system-ui, sans-serif; cursor: pointer; text-align: center; }
+      #dev-pause.on { display: grid; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="dev-hud"></div>
+    <div id="dev-pause">Paused<br /><small style="font-weight:400;opacity:.8">click / tap to resume</small></div>
+    <script type="module" src="./core.ts"></script>
+  </body>
+</html>

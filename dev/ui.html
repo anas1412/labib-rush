@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Labib Rush · UI dev</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #c98a52; overscroll-behavior: none; }
+      /* Stand-in for the golden-hour 3D avenue behind the UI: sky, cream facades, ficus rows, paving. */
+      #bg { position: fixed; inset: -60px; filter: blur(26px) saturate(1.1); background:
+        radial-gradient(ellipse 30% 22% at 72% 30%, rgba(255, 226, 170, 0.95), transparent 70%),
+        radial-gradient(ellipse 18% 30% at 8% 44%, #f1dcb8, transparent 70%),
+        radial-gradient(ellipse 16% 34% at 92% 46%, #ecd1a6, transparent 70%),
+        radial-gradient(ellipse 22% 14% at 30% 58%, #3d5a2a, transparent 72%),
+        radial-gradient(ellipse 26% 14% at 64% 60%, #45622e, transparent 72%),
+        radial-gradient(ellipse 60% 20% at 50% 90%, #b89a78, transparent 75%),
+        linear-gradient(180deg, #6f9fd3 0%, #a9c3dc 28%, #f2c28c 50%, #d99b62 64%, #9c7654 78%, #8b7560 100%); }
+      #app { position: fixed; inset: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="bg"></div>
+    <div id="app"></div>
+    <script type="module" src="./ui.ts"></script>
+  </body>
+</html>
